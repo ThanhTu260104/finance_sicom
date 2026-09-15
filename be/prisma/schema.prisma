@@ -1,0 +1,285 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  SUSPENDED
+  COMPLETED
+  CANCELLED
+}
+
+enum ProjectAssignmentRole {
+  PROJECT_MANAGER
+  PROJECT_COORDINATOR
+  FINANCE
+  OTHER
+}
+
+enum ContractType {
+  MAIN
+  APPENDIX
+  SERVICE
+  OTHER
+}
+
+enum BillingCycle {
+  MONTHLY
+  BIMONTHLY
+  QUARTERLY
+  SEMI_ANNUALLY
+  ANNUALLY
+  MILESTONE
+  CUSTOM
+}
+
+enum ContractStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  TERMINATED
+  CANCELLED
+}
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AcceptanceStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// Trạng thái hồ sơ nghiệm thu
+enum DocumentStatus {
+  NOT_SUBMITTED
+  SUBMITTED_UNPAID
+}
+
+/// Trạng thái thu tiền theo đợt nghiệm thu
+enum AcceptancePaymentStatus {
+  NOT_ACCEPTED
+  WAITING_CLIENT_PAYMENT
+  COLLECTED
+}
+
+enum ContractAttachmentKind {
+  CONTRACT
+  APPENDIX
+  OTHER
+}
+
+model Customer {
+  id           String         @id @default(uuid()) @db.Uuid
+  code         String         @unique
+  name         String
+  taxCode      String?
+  address      String?
+  contactName  String?
+  contactPhone String?
+  contactEmail String?
+  status       CustomerStatus @default(ACTIVE)
+  note         String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  deletedAt    DateTime?
+
+  projects Project[]
+
+  @@map("customers")
+}
+
+model Project {
+  id          String        @id @default(uuid()) @db.Uuid
+  code        String        @unique
+  name        String
+  companyId   String        @db.Uuid
+  customerId  String?       @db.Uuid
+  projectType String?
+  location    String?
+  address     String?
+  startDate   DateTime?
+  endDate     DateTime?
+  status      ProjectStatus @default(PLANNING)
+  description String?
+  note        String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  deletedAt   DateTime?
+
+  customer    Customer?           @relation(fields: [customerId], references: [id])
+  assignments ProjectAssignment[]
+  contracts   Contract[]
+
+  @@index([customerId])
+  @@index([status])
+  @@map("projects")
+}
+
+model ProjectAssignment {
+  id         String                @id @default(uuid()) @db.Uuid
+  projectId  String                @db.Uuid
+  employeeId String                @db.Uuid
+  role       ProjectAssignmentRole
+  startDate  DateTime?
+  endDate    DateTime?
+  isPrimary  Boolean               @default(false)
+  note       String?
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([employeeId])
+  @@map("project_assignments")
+}
+
+model Contract {
+  id            String         @id @default(uuid()) @db.Uuid
+  projectId     String         @db.Uuid
+  contractNo    String         @unique
+  name          String
+  contractType  ContractType   @default(MAIN)
+  contractValue Decimal        @db.Decimal(18, 2)
+  signedDate    DateTime?
+  startDate     DateTime?
+  endDate       DateTime?
+  billingCycle    BillingCycle
+  status          ContractStatus @default(DRAFT)
+  /// Số ngày thanh toán sau ngày hóa đơn (ví dụ 60).
+  paymentTermDays Int            @default(60)
+  note            String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  deletedAt       DateTime?
+
+  project                   Project                    @relation(fields: [projectId], references: [id])
+  revenuePlans              RevenuePlan[]
+  acceptances               Acceptance[]
+  collections               Collection[]
+  monthlyFinancials         ContractMonthlyFinancial[]
+  attachments               ContractAttachment[]
+
+  @@index([projectId])
+  @@index([status])
+  @@index([contractType])
+  @@index([billingCycle])
+  @@map("contracts")
+}
+
+model ContractAttachment {
+  id         String                 @id @default(uuid()) @db.Uuid
+  contractId String                 @db.Uuid
+  kind       ContractAttachmentKind @default(CONTRACT)
+  fileName   String
+  storedName String
+  mimeType   String
+  sizeBytes  Int
+  note       String?
+  createdAt  DateTime               @default(now())
+  updatedAt  DateTime               @updatedAt
+  deletedAt  DateTime?
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([contractId])
+  @@index([kind])
+  @@map("contract_attachments")
+}
+
+/// Planned acceptance/revenue amount per period (e.g. "2026-08").
+model RevenuePlan {
+  id            String   @id @default(uuid()) @db.Uuid
+  contractId    String   @db.Uuid
+  period        String
+  plannedAmount Decimal  @db.Decimal(18, 2)
+  note          String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@unique([contractId, period])
+  @@index([contractId])
+  @@index([period])
+  @@map("revenue_plans")
+}
+
+model Acceptance {
+  id             String                   @id @default(uuid()) @db.Uuid
+  contractId     String                   @db.Uuid
+  /// Đợt nghiệm thu (số đợt / số NT)
+  acceptanceNo   String
+  period         String
+  acceptanceDate DateTime?
+  invoiceNo      String?
+  invoiceDate    DateTime?
+  amount         Decimal                  @db.Decimal(18, 2)
+  status         AcceptanceStatus         @default(DRAFT)
+  documentStatus DocumentStatus           @default(NOT_SUBMITTED)
+  paymentStatus  AcceptancePaymentStatus  @default(NOT_ACCEPTED)
+  note           String?
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+  deletedAt      DateTime?
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([contractId])
+  @@index([period])
+  @@index([status])
+  @@index([documentStatus])
+  @@index([paymentStatus])
+  @@index([acceptanceNo])
+  @@map("acceptances")
+}
+
+/// Actual cash collection per period — separate from acceptance.
+model Collection {
+  id             String    @id @default(uuid()) @db.Uuid
+  contractId     String    @db.Uuid
+  collectionNo   String
+  period         String
+  collectionDate DateTime?
+  amount         Decimal   @db.Decimal(18, 2)
+  note           String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([contractId])
+  @@index([period])
+  @@index([collectionNo])
+  @@map("collections")
+}
+
+/// Monthly execution tracking — stores editable actual work; plan/acceptance/collection are aggregated.
+model ContractMonthlyFinancial {
+  id               String   @id @default(uuid()) @db.Uuid
+  contractId       String   @db.Uuid
+  period           String
+  actualWorkAmount Decimal  @default(0) @db.Decimal(18, 2)
+  note             String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@unique([contractId, period])
+  @@index([contractId])
+  @@index([period])
+  @@map("contract_monthly_financials")
+}
