@@ -4,7 +4,11 @@ export type { CustomerListParams, CustomerPayload } from './customers';
 export { projectsApi } from './projects';
 export type { ProjectListParams, ProjectPayload } from './projects';
 export { contractsApi } from './contracts';
-export type { ContractListParams, ContractPayload } from './contracts';
+export type {
+  ContractBulkPayload,
+  ContractListParams,
+  ContractPayload,
+} from './contracts';
 export { projectAssignmentsApi } from './project-assignments';
 export type { AssignmentPayload } from './project-assignments';
 export { revenuePlansApi, acceptancesApi } from './finance';

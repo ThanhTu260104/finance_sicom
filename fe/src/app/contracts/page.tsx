@@ -4,7 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Plus, Search } from 'lucide-react';
 import { toast } from 'sonner';
-import { contractsApi, projectsApi } from '@/lib/api';
+import {
+  ApiError,
+  contractsApi,
+  projectsApi,
+  type ContractBulkPayload,
+} from '@/lib/api';
 import { formatCurrencyVND, formatDate } from '@/lib/format';
 import {
   isValidAmount,
@@ -47,8 +52,22 @@ import { PaginationBar } from '@/components/shared/pagination-bar';
 import { QueryState } from '@/components/shared/query-state';
 import { Breadcrumbs } from '@/components/layout/breadcrumbs';
 import { CollapsibleFilters } from '@/components/shared/collapsible-filters';
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 const PAGE_SIZE = 10;
+
+type PendingDeletedContractImport = {
+  items: ContractBulkPayload[];
+  contractNos: string[];
+};
 
 function buildContractCsvColumns(projects: Project[]) {
   return [
@@ -188,6 +207,8 @@ export default function ContractsPage() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [pendingDeletedContractImport, setPendingDeletedContractImport] =
+    useState<PendingDeletedContractImport | null>(null);
 
   const contractCsvColumns = useMemo(
     () => buildContractCsvColumns(projects),
@@ -254,8 +275,7 @@ export default function ContractsPage() {
       }
     }
 
-    await contractsApi.bulkUpsert(
-      rows.map((row) => {
+    const items: ContractBulkPayload[] = rows.map((row) => {
         const contractType = normalizeEnum(row.contractType, CONTRACT_TYPES)!;
         const billingCycle = normalizeEnum(row.billingCycle, BILLING_CYCLES)!;
         const status =
@@ -278,13 +298,82 @@ export default function ContractsPage() {
           signedDate: toIsoDate(row.signedDate),
           note: row.note?.trim() || undefined,
         };
-      }),
-    );
-    await load();
+      });
+
+    try {
+      await contractsApi.bulkUpsert(items);
+      await load();
+    } catch (err) {
+      const details = err instanceof ApiError ? err.details : undefined;
+      const conflict = details as
+        | { code?: string; contractNos?: string[] }
+        | undefined;
+      if (
+        err instanceof ApiError &&
+        err.status === 409 &&
+        conflict?.code === 'DELETED_CONTRACT_CONFLICT'
+      ) {
+        setPendingDeletedContractImport({
+          items,
+          contractNos: conflict.contractNos ?? [],
+        });
+        return false;
+      }
+      throw err;
+    }
+  };
+
+  const resolveDeletedContractImport = async (
+    action: 'RESTORE' | 'REPLACE',
+  ) => {
+    if (!pendingDeletedContractImport) return;
+    try {
+      const result = await contractsApi.bulkUpsert(
+        pendingDeletedContractImport.items,
+        action,
+      );
+      toast.success(
+        action === 'RESTORE'
+          ? `Đã khôi phục/cập nhật ${result.updated} hợp đồng cũ.`
+          : `Đã tạo mới ${result.created} hợp đồng và xóa hẳn bản cũ.`,
+      );
+      setPendingDeletedContractImport(null);
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Nhập file thất bại');
+    }
   };
 
   return (
     <div className="space-y-4">
+      <AlertDialog
+        open={pendingDeletedContractImport !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeletedContractImport(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Phát hiện hợp đồng đã xóa</AlertDialogTitle>
+            <AlertDialogDescription>
+              Số hợp đồng {pendingDeletedContractImport?.contractNos.join(', ')}
+              {' '}đã tồn tại dưới dạng bản xóa mềm. Bạn muốn xử lý thế nào?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Hủy</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              onClick={() => void resolveDeletedContractImport('REPLACE')}
+            >
+              Tạo mới, xóa hẳn bản cũ
+            </Button>
+            <Button onClick={() => void resolveDeletedContractImport('RESTORE')}>
+              Khôi phục và cập nhật
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <Breadcrumbs
         items={[
           { label: 'Quản lý dự án' },

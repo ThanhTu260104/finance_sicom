@@ -15,6 +15,11 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { BillingCycle, ContractStatus, ContractType } from '@prisma/client';
 import { Type } from 'class-transformer';
 
+export enum DeletedContractConflictAction {
+  RESTORE = 'RESTORE',
+  REPLACE = 'REPLACE',
+}
+
 export class BulkContractItemDto {
   @ApiProperty({
     example: '175',
@@ -92,4 +97,13 @@ export class BulkContractDto {
   @ValidateNested({ each: true })
   @Type(() => BulkContractItemDto)
   items: BulkContractItemDto[];
+
+  @ApiPropertyOptional({
+    enum: DeletedContractConflictAction,
+    description:
+      'How to handle an imported contract whose number matches a soft-deleted contract',
+  })
+  @IsOptional()
+  @IsEnum(DeletedContractConflictAction)
+  deletedConflictAction?: DeletedContractConflictAction;
 }

@@ -3,10 +3,12 @@ const API_URL =
 
 export class ApiError extends Error {
   status: number;
+  details?: unknown;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, details?: unknown) {
     super(message);
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -16,9 +18,9 @@ async function parseError(res: Response) {
     const message = Array.isArray(body?.message)
       ? body.message.join(', ')
       : body?.message || res.statusText || 'Request failed';
-    return message as string;
+    return { message: message as string, body };
   } catch {
-    return res.statusText || 'Request failed';
+    return { message: res.statusText || 'Request failed' };
   }
 }
 
@@ -40,7 +42,8 @@ export async function apiFetch<T>(
   });
 
   if (!res.ok) {
-    throw new ApiError(await parseError(res), res.status);
+    const error = await parseError(res);
+    throw new ApiError(error.message, res.status, error.body);
   }
 
   if (res.status === 204) {

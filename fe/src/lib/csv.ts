@@ -26,6 +26,13 @@ export function isValidOptionalDate(value: string) {
   return !Number.isNaN(d.getTime());
 }
 
+export function normalizeOptionalDate(value: string) {
+  const v = value.trim();
+  if (!v) return '';
+  const match = /^(\d{4})[/-](\d{2})[/-](\d{2})$/.exec(v);
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : v;
+}
+
 function escapeCell(value: string | number | null | undefined) {
   const raw = value == null ? '' : String(value);
   if (/[",\n\r]/.test(raw)) {

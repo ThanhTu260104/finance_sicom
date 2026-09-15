@@ -67,7 +67,10 @@ export const contractsApi = {
     });
   },
 
-  bulkUpsert(items: ContractBulkPayload[]) {
+  bulkUpsert(
+    items: ContractBulkPayload[],
+    deletedConflictAction?: 'RESTORE' | 'REPLACE',
+  ) {
     return apiFetch<{
       count: number;
       created: number;
@@ -75,7 +78,7 @@ export const contractsApi = {
       data: Contract[];
     }>('/contracts/bulk', {
       method: 'POST',
-      body: JSON.stringify({ items }),
+      body: JSON.stringify({ items, deletedConflictAction }),
     });
   },
 

@@ -3,7 +3,7 @@
 import { useRef, useState } from 'react';
 import { Download, FileUp, FileDown, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { downloadCsv, parseCsv, toCsv } from '@/lib/csv';
+import { downloadCsv, normalizeOptionalDate, parseCsv, toCsv } from '@/lib/csv';
 import {
   formatGroupedNumber,
   parseGroupedNumber,
@@ -47,7 +47,7 @@ type CsvDataTransferProps = {
   sampleRows?: Array<Record<string, string>>;
   exportRows: Array<Record<string, string>>;
   validateRow: (row: Record<string, string>, index: number) => string[];
-  onImport: (rows: Array<Record<string, string>>) => Promise<void>;
+  onImport: (rows: Array<Record<string, string>>) => Promise<void | boolean>;
   className?: string;
 };
 
@@ -150,6 +150,9 @@ export function CsvDataTransfer({
           );
           if (match) cell = match.value;
         }
+        if (col.type === 'date' && cell) {
+          cell = normalizeOptionalDate(cell);
+        }
         values[col.key] = cell;
       }
       return values;
@@ -186,7 +189,7 @@ export function CsvDataTransfer({
     }
     setImporting(true);
     try {
-      await onImport(
+      const completed = await onImport(
         validRows.map((row) => {
           const normalized = { ...row.values };
           for (const col of columns) {
@@ -198,6 +201,7 @@ export function CsvDataTransfer({
           return normalized;
         }),
       );
+      if (completed === false) return;
       toast.success(`Đã nhập ${validRows.length} dòng`);
       setOpen(false);
       setPreview([]);

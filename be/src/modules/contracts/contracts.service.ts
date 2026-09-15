@@ -15,6 +15,7 @@ import { UpdateContractDto } from './dto/update-contract.dto';
 import { QueryContractDto } from './dto/query-contract.dto';
 import {
   BulkContractDto,
+  DeletedContractConflictAction,
 } from './dto/bulk-contract.dto';
 
 @Injectable()
@@ -236,6 +237,26 @@ export class ContractsService {
     let created = 0;
     let updated = 0;
 
+    const softDeletedContracts = await this.prisma.contract.findMany({
+      where: {
+        contractNo: { in: dto.items.map((item) => item.contractNo) },
+        deletedAt: { not: null },
+      },
+      select: { id: true, contractNo: true },
+    });
+    const softDeletedByContractNo = new Map(
+      softDeletedContracts.map((contract) => [contract.contractNo, contract]),
+    );
+
+    if (softDeletedContracts.length > 0 && !dto.deletedConflictAction) {
+      throw new ConflictException({
+        code: 'DELETED_CONTRACT_CONFLICT',
+        message:
+          'Một số số hợp đồng trùng với hợp đồng đã xóa. Hãy chọn khôi phục/cập nhật hoặc tạo mới.',
+        contractNos: softDeletedContracts.map((contract) => contract.contractNo),
+      });
+    }
+
     for (const item of dto.items) {
       const projectId = await this.resolveProjectIdByCode(item.projectCode);
       const payload: CreateContractDto = {
@@ -261,6 +282,33 @@ export class ContractsService {
         const row = await this.update(existing.id, payload);
         results.push(row);
         updated += 1;
+      } else if (softDeletedByContractNo.has(item.contractNo)) {
+        const softDeleted = softDeletedByContractNo.get(item.contractNo)!;
+
+        if (dto.deletedConflictAction === DeletedContractConflictAction.REPLACE) {
+          await this.prisma.contract.delete({ where: { id: softDeleted.id } });
+          const row = await this.create(payload);
+          results.push(row);
+          created += 1;
+        } else {
+          const row = await this.prisma.contract.update({
+            where: { id: softDeleted.id },
+            data: {
+              ...payload,
+              signedDate: payload.signedDate
+                ? new Date(payload.signedDate)
+                : null,
+              startDate: payload.startDate ? new Date(payload.startDate) : null,
+              endDate: payload.endDate ? new Date(payload.endDate) : null,
+              deletedAt: null,
+            },
+            include: {
+              project: { select: { id: true, code: true, name: true } },
+            },
+          });
+          results.push(row);
+          updated += 1;
+        }
       } else {
         const row = await this.create(payload);
         results.push(row);
