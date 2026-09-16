@@ -11,8 +11,8 @@ export type {
 } from './contracts';
 export { projectAssignmentsApi } from './project-assignments';
 export type { AssignmentPayload } from './project-assignments';
-export { revenuePlansApi, acceptancesApi } from './finance';
-export type { RevenuePlanPayload, AcceptancePayload } from './finance';
+export { revenuePlansApi, acceptancesApi, acceptanceSchedulesApi } from './finance';
+export type { RevenuePlanPayload, AcceptancePayload, AcceptanceSchedulePayload } from './finance';
 export { financialControlApi } from './financial-control';
 export type {
   BulkPlanPayload,

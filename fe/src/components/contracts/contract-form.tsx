@@ -31,7 +31,7 @@ const schema = z.object({
   projectId: z.string().uuid('Chọn dự án'),
   contractNo: z.string().min(1, 'Bắt buộc'),
   name: z.string().min(1, 'Bắt buộc'),
-  contractType: z.enum(['MAIN', 'APPENDIX', 'SERVICE', 'OTHER']),
+  contractType: z.enum(['MAINTENANCE', 'OPERATION', 'REPAIR', 'PROJECT']),
   contractValue: z
     .string()
     .min(1, 'Bắt buộc')
@@ -98,7 +98,7 @@ export function ContractForm({
       projectId: initial?.projectId ?? defaultProjectId ?? '',
       contractNo: initial?.contractNo ?? '',
       name: initial?.name ?? '',
-      contractType: initial?.contractType ?? 'MAIN',
+      contractType: initial?.contractType ?? 'PROJECT',
       contractValue: decimalToInput(initial?.contractValue),
       billingCycle: initial?.billingCycle ?? 'MONTHLY',
       signedDate: toDateInputValue(initial?.signedDate),

@@ -31,7 +31,7 @@ export class RevenuePlansService {
   async getContractFinance(contractId: string) {
     const contract = await this.ensureContract(contractId);
 
-    const [plans, approvedAcceptances] = await Promise.all([
+    const [plans, approvedAcceptances, collections] = await Promise.all([
       this.prisma.revenuePlan.findMany({
         where: { contractId },
         orderBy: { period: 'asc' },
@@ -44,10 +44,18 @@ export class RevenuePlansService {
           documentStatus: DocumentStatus.SUBMITTED_UNPAID,
         },
       }),
+      this.prisma.collection.findMany({
+        where: { contractId, deletedAt: null },
+      }),
     ]);
 
     const totalPlanned = sumDecimals(plans.map((p) => p.plannedAmount));
     const totalAccepted = sumDecimals(approvedAcceptances.map((a) => a.amount));
+    const totalCollected = sumDecimals(collections.map((c) => c.amount));
+    const outstandingCollection = Decimal.max(
+      subtractDecimals(totalAccepted, totalCollected),
+      new Decimal(0),
+    );
     const remainingRaw = subtractDecimals(contract.contractValue, totalAccepted);
     const overContractValue = remainingRaw.isNegative();
     const remainingAcceptance = overContractValue
@@ -113,6 +121,8 @@ export class RevenuePlansService {
       contractValue: toDecimalString(contract.contractValue),
       totalPlanned: toDecimalString(totalPlanned),
       totalAccepted: toDecimalString(totalAccepted),
+      totalCollected: toDecimalString(totalCollected),
+      outstandingCollection: toDecimalString(outstandingCollection),
       remainingAcceptance: overContractValue
         ? 'OVER_CONTRACT_VALUE'
         : toDecimalString(remainingAcceptance),

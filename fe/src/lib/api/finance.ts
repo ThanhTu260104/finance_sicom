@@ -5,6 +5,8 @@ import type {
   ContractFinanceSummary,
   DocumentStatus,
   RevenuePlan,
+  AcceptanceSchedule,
+  AcceptanceScheduleMethod,
 } from '@/lib/types';
 import { apiFetch } from './client';
 
@@ -15,6 +17,7 @@ export type RevenuePlanPayload = {
 };
 
 export type AcceptancePayload = {
+  scheduleId?: string;
   acceptanceNo: string;
   period: string;
   acceptanceDate?: string;
@@ -25,6 +28,28 @@ export type AcceptancePayload = {
   documentStatus?: DocumentStatus;
   paymentStatus?: AcceptancePaymentStatus;
   note?: string;
+};
+
+export type AcceptanceSchedulePayload = {
+  sequence: number;
+  name: string;
+  startPeriod?: string;
+  endPeriod?: string;
+  dueDate?: string;
+  method: AcceptanceScheduleMethod;
+  plannedAmount?: number;
+  percentOfContract?: number;
+  plannedQuantity?: number;
+  actualQuantity?: number;
+  unit?: string;
+  note?: string;
+};
+
+export const acceptanceSchedulesApi = {
+  list(contractId: string) { return apiFetch<AcceptanceSchedule[]>(`/contracts/${contractId}/acceptance-schedules`); },
+  create(contractId: string, payload: AcceptanceSchedulePayload) { return apiFetch<AcceptanceSchedule>(`/contracts/${contractId}/acceptance-schedules`, { method: 'POST', body: JSON.stringify(payload) }); },
+  update(id: string, payload: Partial<AcceptanceSchedulePayload>) { return apiFetch<AcceptanceSchedule>(`/acceptance-schedules/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }); },
+  remove(id: string) { return apiFetch<AcceptanceSchedule>(`/acceptance-schedules/${id}`, { method: 'DELETE' }); },
 };
 
 export const revenuePlansApi = {

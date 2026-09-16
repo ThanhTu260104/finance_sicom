@@ -7,7 +7,7 @@ export type ProjectStatus =
   | 'COMPLETED'
   | 'CANCELLED';
 
-export type ContractType = 'MAIN' | 'APPENDIX' | 'SERVICE' | 'OTHER';
+export type ContractType = 'MAINTENANCE' | 'OPERATION' | 'REPAIR' | 'PROJECT';
 
 export type BillingCycle =
   | 'MONTHLY'
@@ -173,6 +173,26 @@ export interface Acceptance {
   daysUntilDue?: number | null;
 }
 
+export type AcceptanceScheduleMethod = 'FIXED_AMOUNT' | 'PERCENT_OF_CONTRACT' | 'QUANTITY';
+
+export interface AcceptanceSchedule {
+  id: string;
+  contractId: string;
+  sequence: number;
+  name: string;
+  startPeriod?: string | null;
+  endPeriod?: string | null;
+  dueDate?: string | null;
+  method: AcceptanceScheduleMethod;
+  plannedAmount?: string | null;
+  percentOfContract?: string | null;
+  plannedQuantity?: string | null;
+  actualQuantity?: string | null;
+  unit?: string | null;
+  note?: string | null;
+  _count?: { acceptances: number };
+}
+
 export interface PeriodComparison {
   period: string;
   plannedAmount: string;
@@ -186,6 +206,8 @@ export interface ContractFinanceSummary {
   contractValue: string;
   totalPlanned: string;
   totalAccepted: string;
+  totalCollected: string;
+  outstandingCollection: string;
   remainingAcceptance: string;
   overContractValue?: boolean;
   currentPeriod?: string;
@@ -193,6 +215,9 @@ export interface ContractFinanceSummary {
   averageMonthlyPlanned?: string;
   acceptanceRatePercent?: string;
   plannedToDate?: string;
+  submittedToDate?: string;
+  pendingSubmissionToDate?: string;
+  remainingPlanAfterPending?: string;
   scheduleRatePercent?: string;
   scheduleVariance?: string;
   planMatchesContractValue: boolean;
@@ -271,6 +296,9 @@ export interface FinancialControlSummary {
   averageMonthlyPlanned?: string;
   acceptanceRatePercent?: string;
   plannedToDate?: string;
+  submittedToDate?: string;
+  pendingSubmissionToDate?: string;
+  remainingPlanAfterPending?: string;
   scheduleRatePercent?: string;
   collectionRatePercent?: string;
 }
@@ -302,7 +330,10 @@ export interface DashboardProjectRow {
   projectName: string;
   contractValue: string;
   planned: string;
+  actualWork: string;
   accepted: string;
+  pendingSubmission: string;
+  planShortfall: string;
   collected: string;
   remainingAcceptance: string;
   outstandingCollection: string;
@@ -345,6 +376,11 @@ export interface ProjectFinanceOverview {
     overContractValue: boolean;
     acceptanceRatePercent: string;
     collectionRatePercent: string;
+    currentPeriod?: string | null;
+    plannedToDate?: string;
+    submittedToDate?: string;
+    pendingSubmissionToDate?: string;
+    remainingPlanAfterPending?: string;
   };
   statusBreakdown: ProjectFinanceStatusSlice[];
   contracts: ProjectContractFinanceOverview[];
@@ -364,6 +400,24 @@ export interface DashboardOverview {
     acceptanceRatePercent: string;
     collectionRatePercent: string;
     planCompletionPercent: string;
+    currentPeriod: string;
+    plannedToDate: string;
+    submittedToDate: string;
+    pendingSubmissionToDate: string;
+    remainingPlanAfterPending: string;
+    delayedAmountToDate: string;
+    currentPlanned: string;
+    currentActualWork: string;
+    currentAccepted: string;
+    currentPendingSubmission: string;
+    currentUnaccepted: string;
+    currentDelayedAmount: string;
+    currentCollected: string;
+    currentOutstandingCollection: string;
+    currentUnperformed: string;
+    currentExecutionRatePercent: string;
+    currentAcceptanceRatePercent: string;
+    currentCollectionRatePercent: string;
   };
   statusBreakdown: DashboardStatusSlice[];
   byProject: DashboardProjectRow[];
@@ -393,10 +447,10 @@ export const CONTRACT_STATUSES: ContractStatus[] = [
 ];
 
 export const CONTRACT_TYPES: ContractType[] = [
-  'MAIN',
-  'APPENDIX',
-  'SERVICE',
-  'OTHER',
+  'MAINTENANCE',
+  'OPERATION',
+  'REPAIR',
+  'PROJECT',
 ];
 
 export const BILLING_CYCLES: BillingCycle[] = [

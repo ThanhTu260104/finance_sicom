@@ -259,6 +259,10 @@ export default function ContractDetailPage() {
                       value={billingCycleLabel[contract.billingCycle]}
                     />
                     <InfoItem
+                      label="Hạn thanh toán"
+                      value={`${contract.paymentTermDays ?? 0} ngày sau khi nộp hồ sơ`}
+                    />
+                    <InfoItem
                       label="Ngày ký"
                       compactValue
                       value={formatDate(contract.signedDate)}

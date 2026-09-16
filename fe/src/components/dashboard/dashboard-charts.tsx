@@ -604,8 +604,9 @@ export function DashboardProjectBars({ data }: { data: DashboardProjectRow[] }) 
   const maxValue = Math.max(
     ...data.flatMap((d) => [
       parseAmount(d.planned),
+      parseAmount(d.actualWork),
       parseAmount(d.accepted),
-      parseAmount(d.collected),
+      parseAmount(d.pendingSubmission),
     ]),
     1,
   );
@@ -637,15 +638,21 @@ export function DashboardProjectBars({ data }: { data: DashboardProjectRow[] }) 
               <span className="font-semibold text-slate-900">
                 {row.projectCode} — {row.projectName}
               </span>
-              <span className="text-xs font-medium text-emerald-700">
-                NT {row.acceptanceRatePercent}%
+              <span className={cn(
+                'text-xs font-medium',
+                parseAmount(row.planShortfall) > 0 ? 'text-rose-700' : 'text-emerald-700',
+              )}>
+                {parseAmount(row.planShortfall) > 0
+                  ? `Thiếu KH ${formatCurrencyVND(row.planShortfall)}`
+                  : 'Đủ kế hoạch đến kỳ'}
               </span>
             </div>
             {(
               [
                 { label: 'KH', value: row.planned, color: SERIES.planned.color },
-                { label: 'NT', value: row.accepted, color: SERIES.accepted.color },
-                { label: 'Thu', value: row.collected, color: SERIES.collected.color },
+                { label: 'TH', value: row.actualWork, color: '#8b5cf6' },
+                { label: 'Nộp HS', value: row.accepted, color: SERIES.accepted.color },
+                { label: 'Chậm HS', value: row.pendingSubmission, color: '#dc2626' },
               ] as const
             ).map((bar) => (
               <div key={bar.label} className="flex items-center gap-2">
@@ -674,27 +681,37 @@ export function DashboardProjectBars({ data }: { data: DashboardProjectRow[] }) 
           title={`${selected.projectCode} — ${selected.projectName}`}
           rows={[
             {
-              label: 'Kế hoạch',
+              label: 'Kế hoạch đến kỳ',
               value: selected.planned,
               color: SERIES.planned.color,
             },
             {
-              label: 'Nghiệm thu',
+              label: 'Đã thực hiện',
+              value: selected.actualWork,
+              color: '#8b5cf6',
+            },
+            {
+              label: 'Đã nộp hồ sơ',
               value: selected.accepted,
               color: SERIES.accepted.color,
             },
             {
-              label: 'Thu tiền',
+              label: 'Chậm trễ: chờ nộp hồ sơ',
+              value: selected.pendingSubmission,
+              color: '#dc2626',
+            },
+            {
+              label: 'Thiếu so với kế hoạch',
+              value: selected.planShortfall,
+              color: '#dc2626',
+            },
+            {
+              label: 'Đã thu tiền',
               value: selected.collected,
               color: SERIES.collected.color,
             },
             {
-              label: 'Chưa NT',
-              value: selected.remainingAcceptance,
-              color: '#ea580c',
-            },
-            {
-              label: 'Chưa thu',
+              label: 'Còn phải thu',
               value: selected.outstandingCollection,
               color: '#dc2626',
             },

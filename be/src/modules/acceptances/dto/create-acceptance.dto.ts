@@ -4,6 +4,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   MaxLength,
   Min,
@@ -19,6 +20,11 @@ import { Type } from 'class-transformer';
 import { PERIOD_REGEX } from '../../../common/constants/period';
 
 export class CreateAcceptanceDto {
+  @ApiPropertyOptional({ format: 'uuid', description: 'Scheduled acceptance milestone' })
+  @IsOptional()
+  @IsUUID()
+  scheduleId?: string;
+
   @ApiProperty({ example: 'Đợt 08/2026', description: 'Đợt nghiệm thu' })
   @IsString()
   @MinLength(1)

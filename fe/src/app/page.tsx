@@ -6,7 +6,7 @@ import { ArrowRight, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { dashboardApi } from '@/lib/api';
 import { formatCurrencyVND, formatPeriod } from '@/lib/format';
-import type { DashboardOverview } from '@/lib/types';
+import type { DashboardMonthlyPoint, DashboardOverview } from '@/lib/types';
 import { QueryState } from '@/components/shared/query-state';
 import {
   DashboardPieChart,
@@ -83,6 +83,9 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [chartType, setChartType] = useState<ChartType>('bar');
+  const [companyChart, setCompanyChart] = useState<
+    'cumulative' | 'completion' | 'monthly'
+  >('cumulative');
   const [fromPeriod, setFromPeriod] = useState('');
   const [toPeriod, setToPeriod] = useState('');
 
@@ -93,11 +96,15 @@ export default function HomePage() {
       const overview = await dashboardApi.overview();
       setData(overview);
       if (overview.monthlyTrend.length > 0) {
-        setFromPeriod((prev) => prev || overview.monthlyTrend[0].period);
+        const periods = overview.monthlyTrend.map((item) => item.period);
+        const latest = overview.monthlyTrend[overview.monthlyTrend.length - 1].period;
+        const initialPeriod = periods.includes(currentPeriod())
+          ? currentPeriod()
+          : latest;
+        setFromPeriod((prev) => prev || initialPeriod);
         setToPeriod(
           (prev) =>
-            prev ||
-            overview.monthlyTrend[overview.monthlyTrend.length - 1].period,
+            prev || initialPeriod,
         );
       }
     } catch (err) {
@@ -127,7 +134,41 @@ export default function HomePage() {
     return filterMonthlyTrend(data.monthlyTrend, fromPeriod, toPeriod);
   }, [data, fromPeriod, toPeriod]);
 
-  const applyPreset = (preset: 'all' | 'month' | '3m' | '6m' | 'ytd') => {
+  const companyCumulativeTrend = useMemo(() => {
+    let planned = 0;
+    let accepted = 0;
+    let collected = 0;
+    return filteredTrend.map((row): DashboardMonthlyPoint => {
+      planned += Number(row.planned) || 0;
+      accepted += Number(row.accepted) || 0;
+      collected += Number(row.collected) || 0;
+      return {
+        period: row.period,
+        planned: String(planned),
+        accepted: String(accepted),
+        collected: String(collected),
+      };
+    });
+  }, [filteredTrend]);
+
+  const companyPlanCompletionSlices = useMemo(() => {
+    const last = companyCumulativeTrend[companyCumulativeTrend.length - 1];
+    const planned = Number(last?.planned ?? 0);
+    const accepted = Number(last?.accepted ?? 0);
+    const completed = Math.min(Math.max(accepted, 0), planned);
+    return [
+      { key: 'PLAN_COMPLETED', label: 'Đã nghiệm thu', amount: String(completed) },
+      {
+        key: 'PLAN_REMAINING',
+        label: 'Còn thiếu so với kế hoạch',
+        amount: String(Math.max(planned - completed, 0)),
+      },
+    ];
+  }, [companyCumulativeTrend]);
+
+  const applyPreset = (
+    preset: 'all' | 'month' | 'previousMonth' | '3m' | '6m' | 'ytd',
+  ) => {
     if (!data || data.monthlyTrend.length === 0) return;
     const first = data.monthlyTrend[0].period;
     const last = data.monthlyTrend[data.monthlyTrend.length - 1].period;
@@ -140,6 +181,13 @@ export default function HomePage() {
     }
     if (preset === 'month') {
       const period = periodOptions.includes(now) ? now : last;
+      setFromPeriod(period);
+      setToPeriod(period);
+      return;
+    }
+    if (preset === 'previousMonth') {
+      const previous = shiftPeriod(now, -1);
+      const period = periodOptions.includes(previous) ? previous : first;
       setFromPeriod(period);
       setToPeriod(period);
       return;
@@ -188,27 +236,71 @@ export default function HomePage() {
       >
         {data && (
           <>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <details open className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-lg px-1 py-2 text-sm font-semibold text-slate-900 [&::-webkit-details-marker]:hidden">
+                <span>Tổng quan lũy kế & chậm trễ</span>
+                <span className="text-xs font-normal text-slate-500">Bấm để thu gọn / mở rộng</span>
+              </summary>
+              <div className="mt-2 space-y-5">
+                <section>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Quy mô hợp đồng</p>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Metric
                 label="Tổng giá trị HĐ"
                 value={formatCurrencyVND(data.summary.contractValue)}
                 hint={`${data.summary.projectCount} dự án · ${data.summary.contractCount} hợp đồng`}
               />
+                  </div>
+                </section>
+
+                <section>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Tiến độ kế hoạch đến kỳ</p>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Metric
-                label="Kế hoạch nghiệm thu"
-                value={formatCurrencyVND(data.summary.totalPlanned)}
-                hint={`Hoàn thành KH ${data.summary.planCompletionPercent}%`}
+                label="KH NT đến kỳ hiện tại"
+                value={formatCurrencyVND(data.summary.plannedToDate)}
+                hint={`Kỳ ${data.summary.currentPeriod} · tổng KH ${formatCurrencyVND(data.summary.totalPlanned)}`}
               />
               <Metric
-                label="Đã nghiệm thu"
-                value={formatCurrencyVND(data.summary.totalAccepted)}
-                hint={`Tỉ lệ ${data.summary.acceptanceRatePercent}% giá trị HĐ`}
+                label="Đã nộp HS đến kỳ"
+                value={formatCurrencyVND(data.summary.submittedToDate)}
+                hint={`So với KH: ${formatCurrencyVND(data.summary.submittedToDate)} / ${formatCurrencyVND(data.summary.plannedToDate)}`}
                 tone={
-                  Number(data.summary.acceptanceRatePercent) >= 70
+                  Number(data.summary.remainingPlanAfterPending) === 0
                     ? 'success'
                     : 'warning'
                 }
               />
+              <Metric
+                label="Chậm trễ: chờ nộp HS"
+                value={formatCurrencyVND(data.summary.pendingSubmissionToDate)}
+                hint="Đã lên đợt nghiệm thu nhưng chưa nộp hồ sơ"
+                tone={
+                  Number(data.summary.pendingSubmissionToDate) > 0
+                    ? 'danger'
+                    : undefined
+                }
+              />
+              <Metric
+                label="Chậm trễ: chưa đạt KH"
+                value={formatCurrencyVND(data.summary.remainingPlanAfterPending)}
+                hint={
+                  Number(data.summary.remainingPlanAfterPending) > 0
+                    ? 'Phần kế hoạch đến kỳ chưa có thực hiện/nghiệm thu'
+                    : 'Không còn phần thiếu kế hoạch'
+                }
+                tone={
+                  Number(data.summary.remainingPlanAfterPending) > 0
+                    ? 'danger'
+                    : 'success'
+                }
+              />
+                  </div>
+                </section>
+
+                <section>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Nghiệm thu & dòng tiền</p>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Metric
                 label="Đã thu tiền"
                 value={formatCurrencyVND(data.summary.totalCollected)}
@@ -235,6 +327,12 @@ export default function HomePage() {
                     : 'success'
                 }
               />
+                  </div>
+                </section>
+
+                <section>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Chỉ số hiệu quả</p>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Metric
                 label="% hoàn thành theo KH"
                 value={`${data.summary.planCompletionPercent}%`}
@@ -245,7 +343,106 @@ export default function HomePage() {
                 value={`${data.summary.collectionRatePercent}%`}
                 hint="Đã thu / Đã nghiệm thu"
               />
-            </div>
+                  </div>
+                </section>
+              </div>
+            </details>
+
+            <details open className="rounded-xl border border-slate-200 bg-white">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
+                <div>
+                  <p className="text-base font-semibold text-slate-900">
+                    Kế hoạch và thực hiện toàn công ty · Kỳ {formatPeriod(data.summary.currentPeriod)}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500">Kế hoạch tháng, thực hiện, nghiệm thu và dòng tiền</p>
+                </div>
+                <span className="text-xs text-slate-500">Thu gọn / mở rộng</span>
+              </summary>
+              <CardHeader className="sr-only">
+                <CardTitle className="text-base">
+                  Kế hoạch và thực hiện toàn công ty · Kỳ {formatPeriod(data.summary.currentPeriod)}
+                </CardTitle>
+                <p className="text-sm text-slate-500">
+                  Kế hoạch là tổng kế hoạch NT trong tháng; thực hiện lấy từ “Thực hiện” từng hợp đồng; nghiệm thu chỉ tính đợt đã nộp hồ sơ.
+                </p>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-4">
+                  <section>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Tiến độ thực hiện & nghiệm thu</p>
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <Metric
+                    label="Kế hoạch tháng"
+                    value={formatCurrencyVND(data.summary.currentPlanned)}
+                    hint="Tổng kế hoạch nghiệm thu kỳ này"
+                  />
+                  <Metric
+                    label="Đã thực hiện"
+                    value={formatCurrencyVND(data.summary.currentActualWork)}
+                    hint={`Đạt ${data.summary.currentExecutionRatePercent}% KH · còn ${formatCurrencyVND(data.summary.currentUnperformed)}`}
+                    tone={Number(data.summary.currentUnperformed) > 0 ? 'warning' : 'success'}
+                  />
+                  <Metric
+                    label="Đã nộp HS / nghiệm thu"
+                    value={formatCurrencyVND(data.summary.currentAccepted)}
+                    hint={`Đạt ${data.summary.currentAcceptanceRatePercent}% KH tháng`}
+                    tone={Number(data.summary.currentUnaccepted) > 0 ? 'warning' : 'success'}
+                  />
+                  <Metric
+                    label="Chậm trễ: chưa đạt KH tháng"
+                    value={formatCurrencyVND(data.summary.currentUnaccepted)}
+                    hint={`Trong đó chờ nộp HS: ${formatCurrencyVND(data.summary.currentPendingSubmission)}`}
+                    tone={Number(data.summary.currentUnaccepted) > 0 ? 'danger' : 'success'}
+                  />
+                    </div>
+                  </section>
+                  <section>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Dòng tiền kỳ này</p>
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <Metric
+                    label="Tiền đã về"
+                    value={formatCurrencyVND(data.summary.currentCollected)}
+                    hint={`Thu ${data.summary.currentCollectionRatePercent}% trên đã NT`}
+                    tone="success"
+                  />
+                  <Metric
+                    label="Còn phải thu"
+                    value={formatCurrencyVND(data.summary.currentOutstandingCollection)}
+                    hint="Đã nộp HS/NT nhưng chưa thu được tiền"
+                    tone={Number(data.summary.currentOutstandingCollection) > 0 ? 'danger' : 'success'}
+                  />
+                    </div>
+                  </section>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div>
+                    <p className="mb-2 text-sm font-medium text-slate-800">
+                      Tiến độ kế hoạch tháng
+                    </p>
+                    <DashboardPieChart
+                      data={[
+                        { key: 'ACTUAL_WORK', label: 'Đã thực hiện', amount: data.summary.currentActualWork },
+                        { key: 'UNPERFORMED', label: 'Chưa thực hiện', amount: data.summary.currentUnperformed },
+                      ]}
+                    />
+                  </div>
+                  <div>
+                    <p className="mb-2 text-sm font-medium text-slate-800">
+                      Nghiệm thu và dòng tiền tháng
+                    </p>
+                    <DashboardPieChart
+                      data={[
+                        { key: 'COLLECTED', label: 'Tiền đã về', amount: data.summary.currentCollected },
+                        { key: 'OUTSTANDING', label: 'Còn phải thu', amount: data.summary.currentOutstandingCollection },
+                        { key: 'PENDING_SUBMISSION', label: 'Chậm: chờ nộp HS', amount: data.summary.currentPendingSubmission },
+                        { key: 'UNACCEPTED', label: 'Chậm: chưa đạt KH', amount: data.summary.currentUnaccepted },
+                      ]}
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </details>
 
             <Card>
               <CardHeader className="pb-3">
@@ -259,6 +456,7 @@ export default function HomePage() {
                     [
                       { key: 'all', label: 'Tất cả' },
                       { key: 'month', label: 'Tháng này' },
+                      { key: 'previousMonth', label: 'Tháng trước' },
                       { key: '3m', label: '3 tháng' },
                       { key: '6m', label: '6 tháng' },
                       { key: 'ytd', label: 'Từ đầu năm' },
@@ -381,6 +579,65 @@ export default function HomePage() {
               </Card>
             </div>
 
+            <details open className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-6 py-4 [&::-webkit-details-marker]:hidden">
+                <div>
+                  <p className="text-base font-semibold text-slate-900">Kế hoạch toàn công ty · Lũy kế theo kỳ</p>
+                  <p className="mt-1 text-sm text-slate-500">Áp dụng theo khoảng thời gian đang chọn phía trên</p>
+                </div>
+                <span className="text-xs text-slate-500">Thu gọn / mở rộng</span>
+              </summary>
+              <CardHeader className="sr-only">
+                <CardTitle className="text-base">
+                  Kế hoạch toàn công ty · Lũy kế theo kỳ
+                </CardTitle>
+                <p className="text-sm text-slate-500">
+                  Toàn bộ biểu đồ áp dụng cho khoảng thời gian đang chọn phía trên
+                </p>
+              </CardHeader>
+              <CardContent>
+                <div className="mb-4 flex flex-wrap gap-2">
+                  {[
+                    { key: 'cumulative', label: 'Đường lũy kế' },
+                    { key: 'completion', label: 'Tròn hoàn thành KH' },
+                    { key: 'monthly', label: 'Cột theo kỳ' },
+                  ].map((item) => (
+                    <Button
+                      key={item.key}
+                      size="sm"
+                      variant={companyChart === item.key ? 'default' : 'outline'}
+                      onClick={() => setCompanyChart(item.key as typeof companyChart)}
+                    >
+                      {item.label}
+                    </Button>
+                  ))}
+                </div>
+                <div className="rounded-lg border border-slate-200 p-4">
+                  {companyChart === 'cumulative' ? (
+                    <>
+                      <p className="mb-1 text-sm font-semibold text-slate-900">Lũy kế kế hoạch / nghiệm thu / thu tiền</p>
+                      <p className="mb-3 text-xs text-slate-500">Xem công ty đang đạt hay chậm kế hoạch tích lũy tới từng kỳ.</p>
+                      <DashboardTrendChart type="line" data={companyCumulativeTrend} />
+                    </>
+                  ) : null}
+                  {companyChart === 'completion' ? (
+                    <>
+                      <p className="mb-1 text-sm font-semibold text-slate-900">Mức hoàn thành kế hoạch toàn công ty</p>
+                      <p className="mb-3 text-xs text-slate-500">Đã nghiệm thu so với tổng kế hoạch trong khoảng đang xem.</p>
+                      <DashboardPieChart data={companyPlanCompletionSlices} />
+                    </>
+                  ) : null}
+                  {companyChart === 'monthly' ? (
+                    <>
+                      <p className="mb-1 text-sm font-semibold text-slate-900">Biến động theo từng kỳ</p>
+                      <p className="mb-3 text-xs text-slate-500">So sánh số phát sinh kế hoạch, nghiệm thu và tiền về ở từng tháng.</p>
+                      <DashboardTrendChart type="bar" data={filteredTrend} />
+                    </>
+                  ) : null}
+                </div>
+              </CardContent>
+            </details>
+
             <div className="grid gap-4 xl:grid-cols-[1fr_1.2fr]">
               <Card>
                 <CardHeader>
@@ -408,11 +665,13 @@ export default function HomePage() {
                         <TableRow>
                           <TableHead>Dự án</TableHead>
                           <TableHead className="text-right">Giá trị HĐ</TableHead>
-                          <TableHead className="text-right">Kế hoạch</TableHead>
-                          <TableHead className="text-right">Đã NT</TableHead>
+                          <TableHead className="text-right">KH đến kỳ</TableHead>
+                          <TableHead className="text-right">Thực hiện</TableHead>
+                          <TableHead className="text-right">Đã nộp HS</TableHead>
+                          <TableHead className="text-right">Chậm: chờ HS</TableHead>
+                          <TableHead className="text-right">Thiếu KH</TableHead>
                           <TableHead className="text-right">Đã thu</TableHead>
-                          <TableHead className="text-right">Chưa NT</TableHead>
-                          <TableHead className="text-right">Chưa thu</TableHead>
+                          <TableHead className="text-right">Còn thu</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -436,13 +695,19 @@ export default function HomePage() {
                               {formatCurrencyVND(row.planned)}
                             </TableCell>
                             <TableCell className="text-right">
+                              {formatCurrencyVND(row.actualWork)}
+                            </TableCell>
+                            <TableCell className="text-right">
                               {formatCurrencyVND(row.accepted)}
                             </TableCell>
                             <TableCell className="text-right">
-                              {formatCurrencyVND(row.collected)}
+                              {formatCurrencyVND(row.pendingSubmission)}
                             </TableCell>
-                            <TableCell className="text-right text-amber-700">
-                              {formatCurrencyVND(row.remainingAcceptance)}
+                            <TableCell className="text-right text-rose-700">
+                              {formatCurrencyVND(row.planShortfall)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {formatCurrencyVND(row.collected)}
                             </TableCell>
                             <TableCell className="text-right text-red-600">
                               {formatCurrencyVND(row.outstandingCollection)}

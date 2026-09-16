@@ -23,10 +23,10 @@ enum ProjectAssignmentRole {
 }
 
 enum ContractType {
-  MAIN
-  APPENDIX
-  SERVICE
-  OTHER
+  MAINTENANCE
+  OPERATION
+  REPAIR
+  PROJECT
 }
 
 enum BillingCycle {
@@ -77,6 +77,12 @@ enum ContractAttachmentKind {
   CONTRACT
   APPENDIX
   OTHER
+}
+
+enum AcceptanceScheduleMethod {
+  FIXED_AMOUNT
+  PERCENT_OF_CONTRACT
+  QUANTITY
 }
 
 model Customer {
@@ -150,7 +156,7 @@ model Contract {
   projectId     String         @db.Uuid
   contractNo    String         @unique
   name          String
-  contractType  ContractType   @default(MAIN)
+  contractType  ContractType   @default(PROJECT)
   contractValue Decimal        @db.Decimal(18, 2)
   signedDate    DateTime?
   startDate     DateTime?
@@ -167,6 +173,7 @@ model Contract {
   project                   Project                    @relation(fields: [projectId], references: [id])
   revenuePlans              RevenuePlan[]
   acceptances               Acceptance[]
+  acceptanceSchedules       AcceptanceSchedule[]
   collections               Collection[]
   monthlyFinancials         ContractMonthlyFinancial[]
   attachments               ContractAttachment[]
@@ -176,6 +183,35 @@ model Contract {
   @@index([contractType])
   @@index([billingCycle])
   @@map("contracts")
+}
+
+/// Planned acceptance milestone. Separate from the monthly execution plan.
+model AcceptanceSchedule {
+  id              String                   @id @default(uuid()) @db.Uuid
+  contractId      String                   @db.Uuid
+  sequence        Int
+  name            String
+  startPeriod     String?
+  endPeriod       String?
+  dueDate         DateTime?
+  method          AcceptanceScheduleMethod @default(FIXED_AMOUNT)
+  plannedAmount   Decimal?                 @db.Decimal(18, 2)
+  percentOfContract Decimal?               @db.Decimal(7, 4)
+  plannedQuantity Decimal?                 @db.Decimal(18, 3)
+  actualQuantity  Decimal?                 @db.Decimal(18, 3)
+  unit            String?
+  note            String?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+  deletedAt       DateTime?
+
+  contract        Contract                  @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  acceptances     Acceptance[]
+
+  @@unique([contractId, sequence])
+  @@index([contractId])
+  @@index([dueDate])
+  @@map("acceptance_schedules")
 }
 
 model ContractAttachment {
@@ -219,6 +255,7 @@ model RevenuePlan {
 model Acceptance {
   id             String                   @id @default(uuid()) @db.Uuid
   contractId     String                   @db.Uuid
+  scheduleId     String?                  @db.Uuid
   /// Đợt nghiệm thu (số đợt / số NT)
   acceptanceNo   String
   period         String
@@ -235,8 +272,10 @@ model Acceptance {
   deletedAt      DateTime?
 
   contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  schedule AcceptanceSchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
 
   @@index([contractId])
+  @@index([scheduleId])
   @@index([period])
   @@index([status])
   @@index([documentStatus])

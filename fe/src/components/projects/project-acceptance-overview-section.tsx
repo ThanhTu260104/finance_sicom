@@ -74,36 +74,35 @@ export function ProjectAcceptanceOverviewSection({
         <CardContent className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <SummaryMetric
-              label="Tổng giá trị HĐ"
-              value={formatCurrencyVND(summary.totalValue)}
+              label="KH NT đến kỳ hiện tại"
+              value={formatCurrencyVND(summary.plannedToDate ?? '0')}
+              hint={summary.currentPeriod ? `Kỳ ${summary.currentPeriod}` : undefined}
             />
             <SummaryMetric
-              label="Đã nghiệm thu"
-              value={formatCurrencyVND(summary.totalAccepted)}
-              hint={`${summary.acceptanceRatePercent}% giá trị HĐ`}
+              label="Đã nộp HS đến kỳ"
+              value={formatCurrencyVND(summary.submittedToDate ?? '0')}
+              hint={`Đã nộp / KH: ${formatCurrencyVND(summary.submittedToDate ?? '0')} / ${formatCurrencyVND(summary.plannedToDate ?? '0')}`}
               tone={
-                over
-                  ? 'danger'
-                  : acceptedRate >= 80
-                    ? 'success'
-                    : acceptedRate >= 40
-                      ? 'warning'
-                      : undefined
+                Number(summary.remainingPlanAfterPending ?? 0) === 0
+                  ? 'success'
+                  : 'warning'
               }
             />
             <SummaryMetric
-              label="Chưa nghiệm thu"
-              value={
-                over || summary.remainingAcceptance === 'OVER_CONTRACT_VALUE'
-                  ? 'Vượt giá trị HĐ'
-                  : formatCurrencyVND(summary.remainingAcceptance)
-              }
-              tone={over ? 'danger' : 'warning'}
+              label="Đã lên NT, chờ nộp HS"
+              value={formatCurrencyVND(summary.pendingSubmissionToDate ?? '0')}
+              hint="Đã ghi nhận đợt NT nhưng chưa nộp hồ sơ"
+              tone={Number(summary.pendingSubmissionToDate ?? 0) > 0 ? 'warning' : undefined}
             />
             <SummaryMetric
-              label="CĐT còn nợ"
-              value={formatCurrencyVND(summary.outstandingCollection)}
-              hint={`Thu ${summary.collectionRatePercent}% trên đã NT`}
+              label="Chậm so với KH hiện tại"
+              value={formatCurrencyVND(summary.remainingPlanAfterPending ?? '0')}
+              hint={
+                Number(summary.remainingPlanAfterPending ?? 0) > 0
+                  ? 'Phần KH lũy kế chưa có đợt NT nào bù vào'
+                  : 'Đủ KH, gồm cả đợt đang chờ nộp HS'
+              }
+              tone={Number(summary.remainingPlanAfterPending ?? 0) > 0 ? 'danger' : 'success'}
             />
           </div>
 

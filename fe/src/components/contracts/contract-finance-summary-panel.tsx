@@ -91,63 +91,16 @@ export function ContractFinanceSummaryPanel({
         <CardTitle className="text-base">Tóm tắt tài chính</CardTitle>
         <p className="text-sm text-slate-600">{situationLine}</p>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <MetricCard
-            label="Giá trị phải NT tháng này"
-            value={formatCurrencyVND(finance.monthlyRequiredAcceptance ?? '0')}
-            hint={
-              finance.currentPeriod
-                ? `Kỳ ${formatPeriod(finance.currentPeriod)} · TB tháng ${formatCurrencyVND(finance.averageMonthlyPlanned ?? '0')}`
-                : undefined
-            }
-            large
-          />
-          <MetricCard
-            label="Tỉ lệ đã nghiệm thu"
-            value={formatRate(finance.acceptanceRatePercent)}
-            hint={`${formatCurrencyVND(finance.totalAccepted)} / ${formatCurrencyVND(finance.contractValue)}`}
-            tone={
-              over
-                ? 'danger'
-                : acceptedRate >= 80
-                  ? 'success'
-                  : acceptedRate >= 40
-                    ? 'warning'
-                    : 'default'
-            }
-            large
-          />
-          <MetricCard
-            label="Số tiền chưa nghiệm thu"
-            value={remainingDisplay(finance.remainingAcceptance, over)}
-            hint="Giá trị HĐ − đã nghiệm thu (đã nộp hồ sơ)"
-            tone={over ? 'danger' : 'warning'}
-            large
-          />
-          <MetricCard
-            label="Tiến độ so với kế hoạch"
-            value={formatRate(finance.scheduleRatePercent)}
-            hint={
-              finance.plannedToDate
-                ? `Đã NT / KH đến ${formatPeriod(finance.currentPeriod ?? '')}: ${formatCurrencyVND(finance.totalAccepted)} / ${formatCurrencyVND(finance.plannedToDate)}`
-                : undefined
-            }
-            tone={
-              scheduleBehind
-                ? 'danger'
-                : scheduleRate >= 100
-                  ? 'success'
-                  : 'warning'
-            }
-            large
-          />
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-3">
+      <CardContent className="space-y-5">
+        <section>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Tổng hợp toàn hợp đồng
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <MetricCard
             label="Giá trị hợp đồng"
             value={formatCurrencyVND(finance.contractValue)}
+            large
           />
           <MetricCard
             label="Tổng kế hoạch nghiệm thu"
@@ -158,25 +111,65 @@ export function ContractFinanceSummaryPanel({
                 : 'KH chưa khớp giá trị HĐ'
             }
             tone={finance.planMatchesContractValue ? 'success' : 'warning'}
+            large
           />
           <MetricCard
             label="Đã nghiệm thu"
             value={formatCurrencyVND(finance.totalAccepted)}
             hint="Chỉ tính đợt đã nộp hồ sơ"
+            large
           />
-        </div>
+          <MetricCard
+            label="Đã thu tiền"
+            value={formatCurrencyVND(finance.totalCollected)}
+            hint={`Còn phải thu ${formatCurrencyVND(finance.outstandingCollection)}`}
+            tone={Number(finance.outstandingCollection) > 0 ? 'warning' : 'success'}
+            large
+          />
+          <MetricCard
+            label="Còn phải nghiệm thu"
+            value={remainingDisplay(finance.remainingAcceptance, over)}
+            hint={`Đã hoàn thành ${formatRate(finance.acceptanceRatePercent)} giá trị HĐ`}
+            tone={over ? 'danger' : 'warning'}
+            large
+          />
+          </div>
+        </section>
 
-        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-          <div
-            className={cn(
-              'h-full rounded-full transition-all',
-              over ? 'bg-red-500' : 'bg-slate-900',
-            )}
-            style={{
-              width: `${Math.min(Math.max(acceptedRate, 0), 100)}%`,
-            }}
-          />
-        </div>
+        <section>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Theo kế hoạch đến kỳ {finance.currentPeriod ? formatPeriod(finance.currentPeriod) : 'hiện tại'}
+          </p>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <MetricCard
+              label="Kế hoạch đến kỳ"
+              value={formatCurrencyVND(finance.plannedToDate ?? '0')}
+              hint={`Kế hoạch riêng kỳ này: ${formatCurrencyVND(finance.monthlyRequiredAcceptance ?? '0')}`}
+              large
+            />
+            <MetricCard
+              label="Đã nộp hồ sơ"
+              value={formatCurrencyVND(finance.submittedToDate ?? finance.totalAccepted)}
+              hint="Lũy kế các đợt đã nộp hồ sơ"
+              tone={scheduleRate >= 100 ? 'success' : 'warning'}
+              large
+            />
+            <MetricCard
+              label="Chậm trễ: chờ nộp HS"
+              value={formatCurrencyVND(finance.pendingSubmissionToDate ?? '0')}
+              hint="Đã lên đợt nghiệm thu nhưng chưa nộp hồ sơ"
+              tone={Number(finance.pendingSubmissionToDate ?? 0) > 0 ? 'danger' : 'success'}
+              large
+            />
+            <MetricCard
+              label="Chậm trễ: chưa đạt KH"
+              value={formatCurrencyVND(finance.remainingPlanAfterPending ?? '0')}
+              hint={scheduleBehind ? situationLine : 'Đã đủ kế hoạch đến kỳ'}
+              tone={scheduleBehind ? 'danger' : 'success'}
+              large
+            />
+          </div>
+        </section>
       </CardContent>
     </Card>
   );

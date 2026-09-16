@@ -3,7 +3,8 @@
 import { useRef, useState } from 'react';
 import { Download, FileUp, FileDown, X } from 'lucide-react';
 import { toast } from 'sonner';
-import { downloadCsv, normalizeOptionalDate, parseCsv, toCsv } from '@/lib/csv';
+import * as XLSX from 'xlsx';
+import { normalizeOptionalDate } from '@/lib/csv';
 import {
   formatGroupedNumber,
   parseGroupedNumber,
@@ -61,6 +62,20 @@ function rebuildPreview(
   }));
 }
 
+function downloadExcel(filename: string, headers: string[], rows: string[][]) {
+  const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  sheet['!cols'] = headers.map((header, index) => ({
+    wch: Math.max(
+      header.length + 2,
+      ...rows.map((row) => String(row[index] ?? '').length + 2),
+      14,
+    ),
+  }));
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, 'Du lieu');
+  XLSX.writeFile(workbook, filename, { compression: true });
+}
+
 export function CsvDataTransfer({
   title,
   filenamePrefix,
@@ -86,11 +101,11 @@ export function CsvDataTransfer({
     ];
 
   const handleDownloadTemplate = () => {
-    const csv = toCsv(
+    downloadExcel(
+      `${filenamePrefix}-mau.xlsx`,
       columns.map((c) => c.header),
       defaultSample.map((row) => columns.map((c) => row[c.key] ?? '')),
     );
-    downloadCsv(`${filenamePrefix}-mau.csv`, csv);
     toast.success('Đã tải file mẫu');
   };
 
@@ -99,20 +114,37 @@ export function CsvDataTransfer({
       toast.error('Chưa có dữ liệu để xuất');
       return;
     }
-    const csv = toCsv(
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadExcel(
+      `${filenamePrefix}-${stamp}.xlsx`,
       columns.map((c) => c.header),
       exportRows.map((row) => columns.map((c) => row[c.key] ?? '')),
     );
-    const stamp = new Date().toISOString().slice(0, 10);
-    downloadCsv(`${filenamePrefix}-${stamp}.csv`, csv);
     toast.success(`Đã xuất ${exportRows.length} dòng`);
   };
 
   const handleFile = async (file: File) => {
-    const text = await file.text();
-    const { headers, rows } = parseCsv(text);
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), {
+        type: 'array',
+        cellDates: false,
+      });
+      const firstSheetName = workbook.SheetNames[0];
+      const sheet = firstSheetName ? workbook.Sheets[firstSheetName] : undefined;
+      const matrix = sheet
+        ? XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+            header: 1,
+            defval: '',
+            raw: false,
+          })
+        : [];
+      const headers = (matrix[0] ?? []).map((cell) => String(cell ?? ''));
+      const rows = matrix
+        .slice(1)
+        .filter((row) => row.some((cell) => String(cell ?? '').trim() !== ''))
+        .map((row) => row.map((cell) => String(cell ?? '')));
     if (headers.length === 0) {
-      toast.error('File CSV trống hoặc không đọc được');
+      toast.error('File Excel trống hoặc không đọc được');
       return;
     }
 
@@ -166,6 +198,9 @@ export function CsvDataTransfer({
     setPreview(rebuildPreview(mapped, validateRow));
     setFileName(file.name);
     setOpen(true);
+    } catch {
+      toast.error('Không thể đọc file Excel. Vui lòng dùng file .xlsx hợp lệ.');
+    }
   };
 
   const updateCell = (rowIndex: number, key: string, value: string) => {
@@ -302,7 +337,7 @@ export function CsvDataTransfer({
         </Button>
         <Button size="sm" variant="outline" onClick={handleExport}>
           <FileDown className="h-4 w-4" />
-          Xuất CSV
+          Xuất Excel
         </Button>
         <Button
           size="sm"
@@ -310,12 +345,12 @@ export function CsvDataTransfer({
           onClick={() => inputRef.current?.click()}
         >
           <FileUp className="h-4 w-4" />
-          Nhập CSV
+          Nhập Excel
         </Button>
         <input
           ref={inputRef}
           type="file"
-          accept=".csv,text/csv"
+          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           className="hidden"
           onChange={(e) => {
             const file = e.target.files?.[0];

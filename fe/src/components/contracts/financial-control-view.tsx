@@ -158,6 +158,8 @@ export function FinancialControlView({ contractId }: { contractId: string }) {
   >({});
   const [savingPeriod, setSavingPeriod] = useState<string | null>(null);
   const [planBusy, setPlanBusy] = useState(false);
+  const [planSetupOpen, setPlanSetupOpen] = useState(true);
+  const [progressOpen, setProgressOpen] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -432,41 +434,39 @@ export function FinancialControlView({ contractId }: { contractId: string }) {
               <CardContent className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                   <SummaryCard
-                    label="Giá trị phải NT tháng này"
-                    value={data.summary.monthlyRequiredAcceptance ?? '0'}
-                    hint={`Kỳ ${formatPeriod(data.summary.currentPeriod ?? data.timeline.currentPeriod)} · TB ${formatCurrencyVND(data.summary.averageMonthlyPlanned ?? '0')}`}
+                    label="KH NT đến kỳ hiện tại"
+                    value={data.summary.plannedToDate ?? '0'}
+                    hint={`Kỳ ${formatPeriod(data.summary.currentPeriod ?? data.timeline.currentPeriod)} · KH tháng này ${formatCurrencyVND(data.summary.monthlyRequiredAcceptance ?? '0')}`}
                     large
                   />
                   <SummaryCard
-                    label="Tỉ lệ đã nghiệm thu"
-                    value={`${data.summary.acceptanceRatePercent ?? '0'}%`}
-                    hint={`${formatCurrencyVND(data.summary.totalAccepted)} / ${formatCurrencyVND(data.summary.contractValue)}`}
+                    label="Đã nộp HS đến kỳ"
+                    value={data.summary.submittedToDate ?? '0'}
+                    hint={`Đã nộp / KH: ${formatCurrencyVND(data.summary.submittedToDate ?? '0')} / ${formatCurrencyVND(data.summary.plannedToDate ?? '0')}`}
                     tone={
-                      data.summary.overContractValue
-                        ? 'danger'
-                        : Number(data.summary.acceptanceRatePercent ?? 0) >= 80
-                          ? 'success'
-                          : Number(data.summary.acceptanceRatePercent ?? 0) >= 40
-                            ? 'warning'
-                            : 'default'
+                      Number(data.summary.remainingPlanAfterPending ?? 0) === 0
+                        ? 'success'
+                        : 'warning'
                     }
                     large
                   />
                   <SummaryCard
-                    label="Số tiền chưa nghiệm thu"
-                    value={data.summary.remainingAcceptance}
-                    hint="Giá trị HĐ − đã nghiệm thu"
-                    tone={
-                      data.summary.overContractValue ? 'danger' : 'warning'
-                    }
+                    label="Đã lên NT, chờ nộp HS"
+                    value={data.summary.pendingSubmissionToDate ?? '0'}
+                    hint="Có số tiền NT nhưng chưa nộp hồ sơ"
+                    tone={Number(data.summary.pendingSubmissionToDate ?? 0) > 0 ? 'warning' : undefined}
                     large
                   />
                   <SummaryCard
-                    label="Còn phải thu (CĐT nợ)"
-                    value={data.summary.outstandingCollection}
-                    hint={`Tỉ lệ thu ${data.summary.collectionRatePercent ?? '0'}% trên đã NT`}
+                    label="Còn thiếu so với KH"
+                    value={data.summary.remainingPlanAfterPending ?? '0'}
+                    hint={
+                      Number(data.summary.remainingPlanAfterPending ?? 0) > 0
+                        ? 'Thiếu so với kế hoạch lũy kế đến kỳ hiện tại'
+                        : 'Đủ KH (kể cả các đợt đang chờ nộp HS)'
+                    }
                     tone={
-                      Number(data.summary.outstandingCollection) > 0
+                      Number(data.summary.remainingPlanAfterPending ?? 0) > 0
                         ? 'danger'
                         : 'success'
                     }
@@ -536,6 +536,13 @@ export function FinancialControlView({ contractId }: { contractId: string }) {
               <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <CardTitle className="text-base">Thiết lập kế hoạch</CardTitle>
                 <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPlanSetupOpen((open) => !open)}
+                  >
+                    {planSetupOpen ? 'Thu gọn' : 'Mở thiết lập'}
+                  </Button>
                   <CsvDataTransfer
                     title="kế hoạch tháng"
                     filenamePrefix={`ke-hoach-${contractId.slice(0, 8)}`}
@@ -600,7 +607,7 @@ export function FinancialControlView({ contractId }: { contractId: string }) {
                   ) : null}
                 </div>
               </CardHeader>
-              <CardContent className="space-y-4">
+              {planSetupOpen ? <CardContent className="space-y-4">
                 <div className="grid gap-3 md:grid-cols-4">
                   <div className="space-y-1">
                     <Label>Kỳ (YYYY-MM)</Label>
@@ -675,16 +682,23 @@ export function FinancialControlView({ contractId }: { contractId: string }) {
                     </Table>
                   </div>
                 ) : null}
-              </CardContent>
+              </CardContent> : null}
             </Card>
 
             <Card className="overflow-hidden">
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between gap-3">
                 <CardTitle className="text-base">
                   Theo dõi thực hiện &amp; tiến độ
                 </CardTitle>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setProgressOpen((open) => !open)}
+                >
+                  {progressOpen ? 'Thu gọn' : 'Mở theo dõi'}
+                </Button>
               </CardHeader>
-              <CardContent className="p-0">
+              {progressOpen ? <CardContent className="p-0">
                 <div className="w-full overflow-x-auto">
                   <Table className="min-w-[1400px]">
                     <TableHeader>
@@ -767,11 +781,15 @@ export function FinancialControlView({ contractId }: { contractId: string }) {
                             />
                           </TableCell>
                           <TableCell>
-                            <ScheduleStatusBadge status={row.scheduleStatus} />
+                            {row.timelineStatus === 'FUTURE' ? (
+                              <span className="text-xs text-slate-500">Chưa đến kỳ</span>
+                            ) : (
+                              <ScheduleStatusBadge status={row.scheduleStatus} />
+                            )}
                           </TableCell>
                           <TableCell>
                             <div className="flex max-w-[220px] flex-wrap gap-1">
-                              {row.bottlenecks.map((flag) => (
+                              {(row.timelineStatus === 'FUTURE' ? [] : row.bottlenecks).map((flag) => (
                                 <BottleneckBadge key={flag} flag={flag} />
                               ))}
                             </div>
@@ -791,7 +809,7 @@ export function FinancialControlView({ contractId }: { contractId: string }) {
                     </TableBody>
                   </Table>
                 </div>
-              </CardContent>
+              </CardContent> : null}
             </Card>
 
             <Card>

@@ -96,7 +96,13 @@ export class FinancialControlService {
   async getFinancialControl(contractId: string) {
     const contract = await this.ensureContract(contractId);
 
-    const [plans, monthlyFinancials, approvedAcceptances, collections] =
+    const [
+      plans,
+      monthlyFinancials,
+      approvedAcceptances,
+      pendingSubmissionAcceptances,
+      collections,
+    ] =
       await Promise.all([
         this.prisma.revenuePlan.findMany({
           where: { contractId },
@@ -112,6 +118,20 @@ export class FinancialControlService {
             deletedAt: null,
             status: AcceptanceStatus.APPROVED,
             documentStatus: DocumentStatus.SUBMITTED_UNPAID,
+          },
+        }),
+        this.prisma.acceptance.findMany({
+          where: {
+            contractId,
+            deletedAt: null,
+            documentStatus: DocumentStatus.NOT_SUBMITTED,
+            status: {
+              in: [
+                AcceptanceStatus.DRAFT,
+                AcceptanceStatus.SUBMITTED,
+                AcceptanceStatus.APPROVED,
+              ],
+            },
           },
         }),
         this.prisma.collection.findMany({
@@ -257,6 +277,20 @@ export class FinancialControlService {
         .filter((p) => p.period <= currentPeriod)
         .map((p) => p.plannedAmount),
     );
+    const submittedToDate = sumDecimals(
+      approvedAcceptances
+        .filter((acceptance) => acceptance.period <= currentPeriod)
+        .map((acceptance) => acceptance.amount),
+    );
+    const pendingSubmissionToDate = sumDecimals(
+      pendingSubmissionAcceptances
+        .filter((acceptance) => acceptance.period <= currentPeriod)
+        .map((acceptance) => acceptance.amount),
+    );
+    const remainingPlanAfterPending = maxDecimal(
+      plannedToDate.sub(submittedToDate).sub(pendingSubmissionToDate),
+      0,
+    );
     const positivePlans = plans.filter((p) =>
       compareDecimals(p.plannedAmount, 0) > 0,
     );
@@ -272,9 +306,9 @@ export class FinancialControlService {
       ? totalAccepted.div(contract.contractValue).mul(100)
       : new Decimal(0);
     const scheduleRate = compareDecimals(plannedToDate, 0) > 0
-      ? totalAccepted.div(plannedToDate).mul(100)
+      ? submittedToDate.div(plannedToDate).mul(100)
       : new Decimal(0);
-    const scheduleVariance = totalAccepted.sub(plannedToDate);
+    const scheduleVariance = submittedToDate.sub(plannedToDate);
     const overallScheduleStatus = this.resolveScheduleStatus(scheduleVariance);
 
     const collectionRate = compareDecimals(totalAccepted, 0) > 0
@@ -311,6 +345,9 @@ export class FinancialControlService {
         averageMonthlyPlanned: toDecimalString(averageMonthlyPlanned),
         acceptanceRatePercent: acceptanceRate.toDecimalPlaces(1).toFixed(1),
         plannedToDate: toDecimalString(plannedToDate),
+        submittedToDate: toDecimalString(submittedToDate),
+        pendingSubmissionToDate: toDecimalString(pendingSubmissionToDate),
+        remainingPlanAfterPending: toDecimalString(remainingPlanAfterPending),
         scheduleRatePercent: scheduleRate.toDecimalPlaces(1).toFixed(1),
         collectionRatePercent: collectionRate.toDecimalPlaces(1).toFixed(1),
       },

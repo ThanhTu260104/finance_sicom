@@ -207,9 +207,21 @@ export default function ProjectDetailPage() {
                         {(project.contracts ?? []).map((contract) => (
                           <TableRow key={contract.id}>
                             <TableCell className="font-medium">
-                              {contract.contractNo}
+                              <Link
+                                href={`/contracts/${contract.id}`}
+                                className="underline-offset-2 hover:text-slate-950 hover:underline"
+                              >
+                                {contract.contractNo}
+                              </Link>
                             </TableCell>
-                            <TableCell>{contract.name}</TableCell>
+                            <TableCell>
+                              <Link
+                                href={`/contracts/${contract.id}`}
+                                className="underline-offset-2 hover:text-slate-950 hover:underline"
+                              >
+                                {contract.name}
+                              </Link>
+                            </TableCell>
                             <TableCell>
                               {formatCurrencyVND(contract.contractValue)}
                             </TableCell>

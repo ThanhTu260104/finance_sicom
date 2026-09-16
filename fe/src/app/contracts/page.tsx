@@ -102,7 +102,7 @@ function buildContractCsvColumns(projects: Project[]) {
       header: 'LoaiHD',
       aliases: ['contractType', 'Loại HĐ'],
       required: true,
-      sample: 'SERVICE',
+      sample: 'MAINTENANCE',
       type: 'select' as const,
       options: CONTRACT_TYPES.map((t) => ({
         value: t,
@@ -397,7 +397,7 @@ export default function ContractsPage() {
                 projectCode: '175',
                 contractNo: '175/2026/HDDV-MAU',
                 name: 'Hop dong dich vu mau',
-                contractType: 'SERVICE',
+                contractType: 'MAINTENANCE',
                 contractValue: '7500000000',
                 billingCycle: 'MONTHLY',
                 status: 'ACTIVE',
@@ -587,13 +587,23 @@ export default function ContractsPage() {
                   {data.map((contract) => (
                     <TableRow key={contract.id}>
                       <TableCell className="font-medium">
-                        {contract.contractNo}
+                        <Link
+                          href={`/contracts/${contract.id}`}
+                          className="underline-offset-2 hover:text-slate-950 hover:underline"
+                        >
+                          {contract.contractNo}
+                        </Link>
                       </TableCell>
-                      <TableCell>{contract.name}</TableCell>
                       <TableCell>
-                        {contract.project
-                          ? `${contract.project.code} — ${contract.project.name}`
-                          : '—'}
+                        <Link
+                          href={`/contracts/${contract.id}`}
+                          className="underline-offset-2 hover:text-slate-950 hover:underline"
+                        >
+                          {contract.name}
+                        </Link>
+                      </TableCell>
+                      <TableCell>
+                        {contract.project?.code ?? '—'}
                       </TableCell>
                       <TableCell>
                         {formatCurrencyVND(contract.contractValue)}

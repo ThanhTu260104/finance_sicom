@@ -70,10 +70,10 @@ export const billingCycleLabel: Record<BillingCycle, string> = {
 };
 
 export const contractTypeLabel: Record<ContractType, string> = {
-  MAIN: 'Hợp đồng chính',
-  APPENDIX: 'Phụ lục hợp đồng',
-  SERVICE: 'Hợp đồng dịch vụ',
-  OTHER: 'Khác',
+  MAINTENANCE: 'Bảo trì',
+  OPERATION: 'Vận hành',
+  REPAIR: 'Sửa chữa',
+  PROJECT: 'Dự án',
 };
 
 export const contractStatusLabel: Record<ContractStatus, string> = {

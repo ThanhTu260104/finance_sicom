@@ -189,6 +189,7 @@ export class AcceptancesService {
     const existing = await this.prisma.acceptance.findFirst({
       where: {
         contractId,
+        scheduleId: dto.scheduleId,
         acceptanceNo: dto.acceptanceNo,
         deletedAt: null,
       },
@@ -268,6 +269,7 @@ export class AcceptancesService {
           : {}),
         ...(dto.period !== undefined ? { period: dto.period } : {}),
         ...(dto.amount !== undefined ? { amount: dto.amount } : {}),
+        ...(dto.scheduleId !== undefined ? { scheduleId: dto.scheduleId || null } : {}),
         ...(dto.note !== undefined ? { note: dto.note } : {}),
         ...(dto.invoiceNo !== undefined ? { invoiceNo: dto.invoiceNo } : {}),
         ...(dto.acceptanceDate !== undefined

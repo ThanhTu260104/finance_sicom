@@ -11,6 +11,7 @@ import { CollectionsModule } from './modules/collections/collections.module';
 import { FinancialControlModule } from './modules/financial-control/financial-control.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { ContractAttachmentsModule } from './modules/contract-attachments/contract-attachments.module';
+import { AcceptanceSchedulesModule } from './modules/acceptance-schedules/acceptance-schedules.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { ContractAttachmentsModule } from './modules/contract-attachments/contra
     FinancialControlModule,
     DashboardModule,
     ContractAttachmentsModule,
+    AcceptanceSchedulesModule,
   ],
 })
 export class AppModule {}

@@ -301,9 +301,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           ) : null}
 
           <div className="flex-1 px-3 py-4 sm:px-4 lg:px-5">
-            <Suspense fallback={null}>
-              <ContractSubNav />
-            </Suspense>
+            <div className="sticky top-[61px] z-20 bg-slate-50/95 pt-1 backdrop-blur">
+              <Suspense fallback={null}>
+                <ContractSubNav />
+              </Suspense>
+            </div>
             <main className="w-full min-w-0">{children}</main>
           </div>
         </div>

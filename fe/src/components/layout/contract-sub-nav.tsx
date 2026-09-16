@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-type TabKey = 'info' | 'plans' | 'acceptances';
+type TabKey = 'info' | 'plans' | 'acceptances' | 'financial';
 
 function getContractId(pathname: string) {
   const match = pathname.match(/^\/contracts\/([^/]+)/);
@@ -25,6 +25,9 @@ export function ContractSubNav() {
   const contractId = getContractId(pathname);
   const tabParam = searchParams.get('tab');
   const active: TabKey | 'list' =
+    contractId && pathname.endsWith('/financial-control')
+      ? 'financial'
+      :
     contractId &&
     (tabParam === 'plans' || tabParam === 'acceptances' || tabParam === 'info')
       ? tabParam
@@ -52,6 +55,11 @@ export function ContractSubNav() {
         key: 'acceptances',
         label: 'Nghiệm thu',
         href: `/contracts/${contractId}?tab=acceptances`,
+      },
+      {
+        key: 'financial',
+        label: 'Quản lý tài chính',
+        href: `/contracts/${contractId}/financial-control`,
       },
     );
   }

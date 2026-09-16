@@ -217,6 +217,25 @@ export class ProjectsService {
         };
       }),
     );
+    const plannedToDate = sumDecimals(
+      contractOverviews.map((contract) =>
+        new Decimal(contract.summary.plannedToDate ?? 0),
+      ),
+    );
+    const submittedToDate = sumDecimals(
+      contractOverviews.map((contract) =>
+        new Decimal(contract.summary.submittedToDate ?? 0),
+      ),
+    );
+    const pendingSubmissionToDate = sumDecimals(
+      contractOverviews.map((contract) =>
+        new Decimal(contract.summary.pendingSubmissionToDate ?? 0),
+      ),
+    );
+    const remainingPlanAfterPending = maxDecimal(
+      plannedToDate.sub(submittedToDate).sub(pendingSubmissionToDate),
+      0,
+    );
 
     return {
       project: {
@@ -236,6 +255,11 @@ export class ProjectsService {
         overContractValue,
         acceptanceRatePercent: acceptanceRate.toDecimalPlaces(1).toFixed(1),
         collectionRatePercent: collectionRate.toDecimalPlaces(1).toFixed(1),
+        currentPeriod: contractOverviews[0]?.summary.currentPeriod ?? null,
+        plannedToDate: toDecimalString(plannedToDate),
+        submittedToDate: toDecimalString(submittedToDate),
+        pendingSubmissionToDate: toDecimalString(pendingSubmissionToDate),
+        remainingPlanAfterPending: toDecimalString(remainingPlanAfterPending),
       },
       statusBreakdown: [
         {

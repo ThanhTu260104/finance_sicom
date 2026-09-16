@@ -184,10 +184,15 @@ export function RevenuePlansSection({
     <div className="space-y-4">
       <Card>
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <CardTitle className="text-base">Kế hoạch nghiệm thu</CardTitle>
+          <div>
+            <CardTitle className="text-base">Kế hoạch nghiệm thu theo đợt</CardTitle>
+            <p className="mt-1 text-sm font-normal text-slate-500">
+              Mỗi dòng là một đợt nghiệm thu. HĐ theo quý chỉ cần tạo một dòng vào tháng cuối quý.
+            </p>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <CsvDataTransfer
-              title="kế hoạch tháng"
+              title="kế hoạch nghiệm thu theo đợt"
               filenamePrefix={`ke-hoach-${contractId.slice(0, 8)}`}
               columns={PLAN_CSV_COLUMNS}
               sampleRows={[
@@ -229,9 +234,9 @@ export function RevenuePlansSection({
         <CardContent className="space-y-4">
           {!finance.planMatchesContractValue && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              Tổng kế hoạch ({formatCurrencyVND(finance.totalPlanned)}) khác giá
-              trị hợp đồng ({formatCurrencyVND(finance.contractValue)}). Có thể
-              lưu bình thường — hệ thống cho phép under/over planning.
+              Tổng các đợt đã lập ({formatCurrencyVND(finance.totalPlanned)}) khác giá
+              trị hợp đồng ({formatCurrencyVND(finance.contractValue)}). Nếu hợp đồng còn các
+              đợt chưa đến hạn, hãy bổ sung thêm các kỳ tương ứng.
             </div>
           )}
 

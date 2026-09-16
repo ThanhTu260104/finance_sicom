@@ -18,7 +18,7 @@ export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
   async getOverview() {
-    const [projects, contracts, plans, acceptances, collections] =
+    const [projects, contracts, plans, monthlyFinancials, acceptances, collections] =
       await Promise.all([
         this.prisma.project.count({ where: { deletedAt: null } }),
         this.prisma.contract.findMany({
@@ -28,6 +28,7 @@ export class DashboardService {
           },
         }),
         this.prisma.revenuePlan.findMany(),
+        this.prisma.contractMonthlyFinancial.findMany(),
         this.prisma.acceptance.findMany({
           where: { deletedAt: null },
         }),
@@ -38,6 +39,8 @@ export class DashboardService {
 
     const contractValue = sumDecimals(contracts.map((c) => c.contractValue));
     const totalPlanned = sumDecimals(plans.map((p) => p.plannedAmount));
+    const now = new Date();
+    const currentPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
     const submittedAcceptances = acceptances.filter(
       (a) =>
@@ -46,6 +49,78 @@ export class DashboardService {
     );
     const totalAccepted = sumDecimals(
       submittedAcceptances.map((a) => a.amount),
+    );
+    const plannedToDate = sumDecimals(
+      plans
+        .filter((plan) => plan.period <= currentPeriod)
+        .map((plan) => plan.plannedAmount),
+    );
+    const currentPlanned = sumDecimals(
+      plans
+        .filter((plan) => plan.period === currentPeriod)
+        .map((plan) => plan.plannedAmount),
+    );
+    const currentActualWork = sumDecimals(
+      monthlyFinancials
+        .filter((financial) => financial.period === currentPeriod)
+        .map((financial) => financial.actualWorkAmount),
+    );
+    const currentAccepted = sumDecimals(
+      submittedAcceptances
+        .filter((acceptance) => acceptance.period === currentPeriod)
+        .map((acceptance) => acceptance.amount),
+    );
+    const currentCollected = sumDecimals(
+      collections
+        .filter((collection) => collection.period === currentPeriod)
+        .map((collection) => collection.amount),
+    );
+    const submittedToDate = sumDecimals(
+      submittedAcceptances
+        .filter((acceptance) => acceptance.period <= currentPeriod)
+        .map((acceptance) => acceptance.amount),
+    );
+    const pendingSubmissionToDate = sumDecimals(
+      acceptances
+        .filter(
+          (acceptance) =>
+            acceptance.period <= currentPeriod &&
+            acceptance.documentStatus === DocumentStatus.NOT_SUBMITTED &&
+            acceptance.status !== AcceptanceStatus.REJECTED &&
+            acceptance.status !== AcceptanceStatus.CANCELLED,
+        )
+        .map((acceptance) => acceptance.amount),
+    );
+    const remainingPlanAfterPending = maxDecimal(
+      plannedToDate.sub(submittedToDate).sub(pendingSubmissionToDate),
+      0,
+    );
+    const delayedAmountToDate = pendingSubmissionToDate.add(
+      remainingPlanAfterPending,
+    );
+    const currentPendingSubmission = sumDecimals(
+      acceptances
+        .filter(
+          (acceptance) =>
+            acceptance.period === currentPeriod &&
+            acceptance.documentStatus === DocumentStatus.NOT_SUBMITTED &&
+            acceptance.status !== AcceptanceStatus.REJECTED &&
+            acceptance.status !== AcceptanceStatus.CANCELLED,
+        )
+        .map((acceptance) => acceptance.amount),
+    );
+    const currentUnaccepted = maxDecimal(
+      currentPlanned.sub(currentAccepted).sub(currentPendingSubmission),
+      0,
+    );
+    const currentDelayedAmount = currentPendingSubmission.add(currentUnaccepted);
+    const currentUnperformed = maxDecimal(
+      currentPlanned.sub(currentActualWork),
+      0,
+    );
+    const currentOutstandingCollection = maxDecimal(
+      currentAccepted.sub(currentCollected),
+      0,
     );
     const totalCollected = sumDecimals(collections.map((c) => c.amount));
 
@@ -94,6 +169,7 @@ export class DashboardService {
 
     const acceptedByContract = new Map<string, Decimal>();
     for (const row of submittedAcceptances) {
+      if (row.period > currentPeriod) continue;
       acceptedByContract.set(
         row.contractId,
         (acceptedByContract.get(row.contractId) ?? new Decimal(0)).add(
@@ -103,6 +179,7 @@ export class DashboardService {
     }
     const collectedByContract = new Map<string, Decimal>();
     for (const row of collections) {
+      if (row.period > currentPeriod) continue;
       collectedByContract.set(
         row.contractId,
         (collectedByContract.get(row.contractId) ?? new Decimal(0)).add(
@@ -112,11 +189,33 @@ export class DashboardService {
     }
     const plannedByContract = new Map<string, Decimal>();
     for (const row of plans) {
+      if (row.period > currentPeriod) continue;
       plannedByContract.set(
         row.contractId,
         (plannedByContract.get(row.contractId) ?? new Decimal(0)).add(
           row.plannedAmount,
         ),
+      );
+    }
+    const actualWorkByContract = new Map<string, Decimal>();
+    for (const row of monthlyFinancials) {
+      if (row.period > currentPeriod) continue;
+      actualWorkByContract.set(
+        row.contractId,
+        (actualWorkByContract.get(row.contractId) ?? new Decimal(0)).add(row.actualWorkAmount),
+      );
+    }
+    const pendingSubmissionByContract = new Map<string, Decimal>();
+    for (const row of acceptances) {
+      if (
+        row.period > currentPeriod ||
+        row.documentStatus !== DocumentStatus.NOT_SUBMITTED ||
+        row.status === AcceptanceStatus.REJECTED ||
+        row.status === AcceptanceStatus.CANCELLED
+      ) continue;
+      pendingSubmissionByContract.set(
+        row.contractId,
+        (pendingSubmissionByContract.get(row.contractId) ?? new Decimal(0)).add(row.amount),
       );
     }
 
@@ -128,7 +227,9 @@ export class DashboardService {
         projectName: string;
         contractValue: Decimal;
         planned: Decimal;
+        actualWork: Decimal;
         accepted: Decimal;
+        pendingSubmission: Decimal;
         collected: Decimal;
       }
     >();
@@ -141,16 +242,20 @@ export class DashboardService {
         projectName: contract.project.name,
         contractValue: new Decimal(0),
         planned: new Decimal(0),
+        actualWork: new Decimal(0),
         accepted: new Decimal(0),
+        pendingSubmission: new Decimal(0),
         collected: new Decimal(0),
       };
       current.contractValue = current.contractValue.add(contract.contractValue);
       current.planned = current.planned.add(
         plannedByContract.get(contract.id) ?? new Decimal(0),
       );
+      current.actualWork = current.actualWork.add(actualWorkByContract.get(contract.id) ?? new Decimal(0));
       current.accepted = current.accepted.add(
         acceptedByContract.get(contract.id) ?? new Decimal(0),
       );
+      current.pendingSubmission = current.pendingSubmission.add(pendingSubmissionByContract.get(contract.id) ?? new Decimal(0));
       current.collected = current.collected.add(
         collectedByContract.get(contract.id) ?? new Decimal(0),
       );
@@ -160,8 +265,8 @@ export class DashboardService {
     const byProject = Array.from(byProjectMap.values())
       .sort((a, b) => b.contractValue.cmp(a.contractValue))
       .map((row) => {
-        const remaining = maxDecimal(
-          row.contractValue.sub(row.accepted),
+        const shortfall = maxDecimal(
+          row.planned.sub(row.accepted).sub(row.pendingSubmission),
           0,
         );
         const outstanding = maxDecimal(row.accepted.sub(row.collected), 0);
@@ -171,9 +276,12 @@ export class DashboardService {
           projectName: row.projectName,
           contractValue: toDecimalString(row.contractValue),
           planned: toDecimalString(row.planned),
+          actualWork: toDecimalString(row.actualWork),
           accepted: toDecimalString(row.accepted),
+          pendingSubmission: toDecimalString(row.pendingSubmission),
+          planShortfall: toDecimalString(shortfall),
           collected: toDecimalString(row.collected),
-          remainingAcceptance: toDecimalString(remaining),
+          remainingAcceptance: toDecimalString(maxDecimal(row.contractValue.sub(row.accepted), 0)),
           outstandingCollection: toDecimalString(outstanding),
           acceptanceRatePercent: row.contractValue.gt(0)
             ? row.accepted.div(row.contractValue).mul(100).toDecimalPlaces(1).toFixed(1)
@@ -258,6 +366,33 @@ export class DashboardService {
         acceptanceRatePercent: acceptanceRate.toDecimalPlaces(1).toFixed(1),
         collectionRatePercent: collectionRate.toDecimalPlaces(1).toFixed(1),
         planCompletionPercent: planCompletionRate.toDecimalPlaces(1).toFixed(1),
+        currentPeriod,
+        plannedToDate: toDecimalString(plannedToDate),
+        submittedToDate: toDecimalString(submittedToDate),
+        pendingSubmissionToDate: toDecimalString(pendingSubmissionToDate),
+        remainingPlanAfterPending: toDecimalString(remainingPlanAfterPending),
+        delayedAmountToDate: toDecimalString(delayedAmountToDate),
+        currentPlanned: toDecimalString(currentPlanned),
+        currentActualWork: toDecimalString(currentActualWork),
+        currentAccepted: toDecimalString(currentAccepted),
+        currentPendingSubmission: toDecimalString(currentPendingSubmission),
+        currentUnaccepted: toDecimalString(currentUnaccepted),
+        currentDelayedAmount: toDecimalString(currentDelayedAmount),
+        currentCollected: toDecimalString(currentCollected),
+        currentOutstandingCollection: toDecimalString(currentOutstandingCollection),
+        currentUnperformed: toDecimalString(currentUnperformed),
+        currentExecutionRatePercent:
+          compareDecimals(currentPlanned, 0) > 0
+            ? currentActualWork.div(currentPlanned).mul(100).toDecimalPlaces(1).toFixed(1)
+            : '0.0',
+        currentAcceptanceRatePercent:
+          compareDecimals(currentPlanned, 0) > 0
+            ? currentAccepted.div(currentPlanned).mul(100).toDecimalPlaces(1).toFixed(1)
+            : '0.0',
+        currentCollectionRatePercent:
+          compareDecimals(currentAccepted, 0) > 0
+            ? currentCollected.div(currentAccepted).mul(100).toDecimalPlaces(1).toFixed(1)
+            : '0.0',
       },
       statusBreakdown: [
         {
