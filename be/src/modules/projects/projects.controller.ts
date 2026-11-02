@@ -11,6 +11,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { AllowFeature } from '../../common/decorators/feature.decorator';
+import { FEATURES } from '../../common/constants/features';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ProjectsService } from './projects.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -36,6 +38,8 @@ export class ProjectsController {
   }
 
   @Get()
+  // Tài khoản giới hạn: form "Thêm hợp đồng" và bộ lọc "Danh sách hợp đồng" cần API này
+  @AllowFeature(FEATURES.CONTRACTS_CREATE, FEATURES.CONTRACTS_LIST)
   @ApiOperation({ summary: 'List projects' })
   findAll(@Query() query: QueryProjectDto) {
     return this.projectsService.findAll(query);

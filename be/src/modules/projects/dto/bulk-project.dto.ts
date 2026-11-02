@@ -76,6 +76,15 @@ export class BulkProjectItemDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  @ApiPropertyOptional({
+    description: 'Tên trưởng dự án — lưu vào phân công PROJECT_MANAGER',
+    example: 'Nguyễn Văn A',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  projectManagerName?: string;
 }
 
 export class BulkProjectDto {

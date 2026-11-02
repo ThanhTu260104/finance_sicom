@@ -14,6 +14,7 @@ import {
   normalizeAmount,
 } from '@/lib/csv';
 import type { Collection } from '@/lib/types';
+import { useContractFlowLabels } from '@/lib/contract-kind';
 import { ConfirmDeleteButton } from '@/components/shared/confirm-delete-button';
 import {
   buildPeriodOptions,
@@ -34,6 +35,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { QueryState } from '@/components/shared/query-state';
+import { WriteOnly } from '@/components/auth/auth-provider';
 
 const PERIOD_OPTIONS = buildPeriodOptions();
 
@@ -104,6 +106,7 @@ export function CollectionsSection({
   contractId: string;
   onChanged?: () => void;
 }) {
+  const flow = useContractFlowLabels();
   const [items, setItems] = useState<Collection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -135,13 +138,13 @@ export function CollectionsSection({
       setItems(data);
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : 'Không tải được thu tiền';
+        err instanceof Error ? err.message : `Không tải được ${flow.cashFlowLower}`;
       setError(message);
       toast.error(message);
     } finally {
       setLoading(false);
     }
-  }, [contractId]);
+  }, [contractId, flow.cashFlowLower]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -186,10 +189,10 @@ export function CollectionsSection({
 
       if (editing) {
         await collectionsApi.update(editing.id, payload);
-        toast.success('Đã cập nhật thu tiền');
+        toast.success(`Đã cập nhật ${flow.cashFlowLower}`);
       } else {
         await collectionsApi.create(contractId, payload);
-        toast.success('Đã thêm thu tiền');
+        toast.success(`Đã thêm ${flow.cashFlowLower}`);
       }
 
       setShowForm(false);
@@ -204,7 +207,7 @@ export function CollectionsSection({
   const handleDelete = async (id: string) => {
     try {
       await collectionsApi.remove(id);
-      toast.success('Đã xóa thu tiền');
+      toast.success(`Đã xóa ${flow.cashFlowLower}`);
       load();
       onChanged?.();
     } catch (err) {
@@ -231,7 +234,7 @@ export function CollectionsSection({
     <Card>
       <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <CardTitle className="text-base">Thu tiền</CardTitle>
+          <CardTitle className="text-base">{flow.cashFlow}</CardTitle>
           <p className="mt-1 text-xs text-slate-500">
             Tiền về thực tế. Khi thêm/sửa/xóa sẽ tự cập nhật trạng thái thu
             trên các đợt nghiệm thu cùng kỳ.
@@ -239,7 +242,7 @@ export function CollectionsSection({
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <CsvDataTransfer
-            title="thu tiền"
+            title={flow.cashFlowLower}
             filenamePrefix={`thu-tien-${contractId.slice(0, 8)}`}
             columns={COLLECTION_CSV_COLUMNS}
             sampleRows={[
@@ -281,9 +284,11 @@ export function CollectionsSection({
             }}
             onImport={handleImportCsv}
           />
-          <Button size="sm" onClick={openCreate}>
-            Thêm thu tiền
-          </Button>
+          <WriteOnly>
+            <Button size="sm" onClick={openCreate}>
+              Thêm {flow.cashFlowLower}
+            </Button>
+          </WriteOnly>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -321,7 +326,7 @@ export function CollectionsSection({
               ) : null}
             </div>
             <div className="space-y-1">
-              <Label>Ngày thu</Label>
+              <Label>{flow.kind === 'INVESTOR' ? 'Ngày thu' : 'Ngày chi'}</Label>
               <Input type="date" {...register('collectionDate')} />
             </div>
             <div className="space-y-1 md:col-span-2">
@@ -350,7 +355,7 @@ export function CollectionsSection({
           loading={loading}
           error={error}
           empty={items.length === 0}
-          emptyMessage="Chưa có bản ghi thu tiền."
+          emptyMessage={`Chưa có bản ghi ${flow.cashFlowLower}.`}
           onRetry={load}
         >
           <div className="overflow-x-auto">
@@ -360,7 +365,7 @@ export function CollectionsSection({
                   <TableHead>Số CT</TableHead>
                   <TableHead>Kỳ</TableHead>
                   <TableHead>Số tiền</TableHead>
-                  <TableHead>Ngày thu</TableHead>
+                  <TableHead>{flow.kind === 'INVESTOR' ? 'Ngày thu' : 'Ngày chi'}</TableHead>
                   <TableHead>Ghi chú</TableHead>
                   <TableHead className="text-right">Thao tác</TableHead>
                 </TableRow>
@@ -375,12 +380,14 @@ export function CollectionsSection({
                     <TableCell>{item.note || '—'}</TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-2">
-                        <Button size="sm" variant="secondary" onClick={() => openEdit(item)}>
-                          Sửa
-                        </Button>
+                        <WriteOnly>
+                          <Button size="sm" variant="secondary" onClick={() => openEdit(item)}>
+                            Sửa
+                          </Button>
+                        </WriteOnly>
                         <ConfirmDeleteButton
                           onConfirm={() => handleDelete(item.id)}
-                          title="Xóa thu tiền?"
+                          title={`Xóa ${flow.cashFlowLower}?`}
                           description={`Xóa bản ghi ${item.collectionNo}.`}
                         />
                       </div>

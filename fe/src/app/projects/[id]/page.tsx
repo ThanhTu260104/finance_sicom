@@ -3,32 +3,24 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { Pencil, Plus } from 'lucide-react';
+import { Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { projectsApi } from '@/lib/api';
-import { formatCurrencyVND, formatDate } from '@/lib/format';
+import { formatDate } from '@/lib/format';
 import type { Project, ProjectFinanceOverview } from '@/lib/types';
 import { ProjectAcceptanceOverviewSection } from '@/components/projects/project-acceptance-overview-section';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import {
-  ContractStatusBadge,
-  ProjectStatusBadge,
-  billingCycleLabel,
-  contractTypeLabel,
-} from '@/components/shared/status-badges';
+import { ProjectStatusBadge } from '@/components/shared/status-badges';
 import { ConfirmDeleteButton } from '@/components/shared/confirm-delete-button';
 import { QueryState } from '@/components/shared/query-state';
 import { ProjectAssignmentsSection } from '@/components/projects/project-assignments-section';
+import { ProjectOperatingCostsSection } from '@/components/projects/project-operating-costs-section';
+import { ProjectContractCostsSection } from '@/components/projects/project-contract-costs-section';
+import { ProjectContractsSection } from '@/components/projects/project-contracts-section';
+import { ContractExpiryHighlight } from '@/components/contracts/contract-expiry-highlight';
 import { Breadcrumbs } from '@/components/layout/breadcrumbs';
+import { WriteOnly } from '@/components/auth/auth-provider';
 
 function InfoItem({ label, value }: { label: string; value: ReactNode }) {
   return (
@@ -116,12 +108,14 @@ export default function ProjectDetailPage() {
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button asChild variant="secondary">
-                  <Link href={`/projects/${project.id}/edit`}>
-                    <Pencil className="h-4 w-4" />
-                    Sửa
-                  </Link>
-                </Button>
+                <WriteOnly>
+                  <Button asChild variant="secondary">
+                    <Link href={`/projects/${project.id}/edit`}>
+                      <Pencil className="h-4 w-4" />
+                      Sửa
+                    </Link>
+                  </Button>
+                </WriteOnly>
                 <ConfirmDeleteButton
                   onConfirm={handleDelete}
                   title="Xóa dự án?"
@@ -138,7 +132,7 @@ export default function ProjectDetailPage() {
                 <InfoItem label="Mã dự án" value={project.code} />
                 <InfoItem label="Tên dự án" value={project.name} />
                 <InfoItem
-                  label="Khách hàng"
+                  label="Chủ đầu tư"
                   value={
                     project.customer
                       ? `${project.customer.code} — ${project.customer.name}`
@@ -146,9 +140,15 @@ export default function ProjectDetailPage() {
                   }
                 />
                 <InfoItem
-                  label="Công ty"
+                  label="Công ty ký HĐ"
                   value={
-                    <span className="font-mono text-xs">{project.companyId}</span>
+                    [
+                      ...new Set(
+                        (project.contracts ?? [])
+                          .map((c) => c.company?.code)
+                          .filter(Boolean),
+                      ),
+                    ].join(', ') || '—'
                   }
                 />
                 <InfoItem label="Loại dự án" value={project.projectType} />
@@ -172,88 +172,24 @@ export default function ProjectDetailPage() {
 
             <ProjectAssignmentsSection
               projectId={project.id}
+              projectCode={project.code}
               initial={project.assignments ?? []}
             />
 
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between gap-3">
-                <CardTitle className="text-base">Hợp đồng</CardTitle>
-                <Button asChild size="sm">
-                  <Link href={`/contracts/new?projectId=${project.id}`}>
-                    <Plus className="h-4 w-4" />
-                    Thêm hợp đồng
-                  </Link>
-                </Button>
-              </CardHeader>
-              <CardContent>
-                {(project.contracts ?? []).length === 0 ? (
-                  <p className="text-sm text-slate-500">Chưa có hợp đồng.</p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Số hợp đồng</TableHead>
-                          <TableHead>Tên hợp đồng</TableHead>
-                          <TableHead>Giá trị</TableHead>
-                          <TableHead>Loại hợp đồng</TableHead>
-                          <TableHead>Ngày ký</TableHead>
-                          <TableHead>Chu kỳ nghiệm thu</TableHead>
-                          <TableHead>Trạng thái</TableHead>
-                          <TableHead className="text-right">Thao tác</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {(project.contracts ?? []).map((contract) => (
-                          <TableRow key={contract.id}>
-                            <TableCell className="font-medium">
-                              <Link
-                                href={`/contracts/${contract.id}`}
-                                className="underline-offset-2 hover:text-slate-950 hover:underline"
-                              >
-                                {contract.contractNo}
-                              </Link>
-                            </TableCell>
-                            <TableCell>
-                              <Link
-                                href={`/contracts/${contract.id}`}
-                                className="underline-offset-2 hover:text-slate-950 hover:underline"
-                              >
-                                {contract.name}
-                              </Link>
-                            </TableCell>
-                            <TableCell>
-                              {formatCurrencyVND(contract.contractValue)}
-                            </TableCell>
-                            <TableCell>
-                              {contractTypeLabel[contract.contractType]}
-                            </TableCell>
-                            <TableCell>
-                              {formatDate(contract.signedDate)}
-                            </TableCell>
-                            <TableCell>
-                              {billingCycleLabel[contract.billingCycle]}
-                            </TableCell>
-                            <TableCell>
-                              <ContractStatusBadge status={contract.status} />
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex justify-end">
-                                <Button asChild size="sm" variant="outline">
-                                  <Link href={`/contracts/${contract.id}`}>
-                                    Xem hợp đồng
-                                  </Link>
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            <ProjectOperatingCostsSection
+              projectId={project.id}
+              projectCode={project.code}
+            />
+
+            <ProjectContractCostsSection projectId={project.id} />
+
+            <ContractExpiryHighlight contracts={project.contracts ?? []} />
+
+            <ProjectContractsSection
+              projectId={project.id}
+              contracts={project.contracts ?? []}
+              onChanged={() => void load()}
+            />
 
             {financeOverview ? (
               <ProjectAcceptanceOverviewSection overview={financeOverview} />

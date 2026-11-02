@@ -1,6 +1,7 @@
 import type {
   PaginatedResponse,
   Project,
+  ProjectContractCosts,
   ProjectFinanceOverview,
   ProjectStatus,
 } from '@/lib/types';
@@ -29,6 +30,7 @@ export type ProjectPayload = {
   status?: ProjectStatus;
   description?: string;
   note?: string;
+  projectManagerName?: string;
 };
 
 export type ProjectBulkPayload = {
@@ -43,6 +45,7 @@ export type ProjectBulkPayload = {
   status?: ProjectStatus;
   description?: string;
   note?: string;
+  projectManagerName?: string;
 };
 
 export const projectsApi = {
@@ -58,6 +61,16 @@ export const projectsApi = {
 
   getFinanceOverview(id: string) {
     return apiFetch<ProjectFinanceOverview>(`/projects/${id}/finance-overview`);
+  },
+
+  /** Chi phí thầu phụ / NCC (tổng chi trả theo kỳ) */
+  getContractCosts(
+    id: string,
+    params: { year?: number; fromPeriod?: string; toPeriod?: string } = {},
+  ) {
+    return apiFetch<ProjectContractCosts>(
+      `/projects/${id}/contract-costs${buildQuery(params)}`,
+    );
   },
 
   create(payload: ProjectPayload) {

@@ -11,23 +11,49 @@ import type {
 import { apiFetch } from './client';
 
 export type RevenuePlanPayload = {
-  period: string;
+  period?: string;
+  batchSequence?: number;
+  periodStartDate?: string;
+  periodEndDate?: string;
+  scheduleId?: string;
   plannedAmount: number;
+  plannedAcceptanceDate?: string;
   note?: string;
 };
 
 export type AcceptancePayload = {
   scheduleId?: string;
+  revenuePlanId?: string;
   acceptanceNo: string;
   period: string;
   acceptanceDate?: string;
   invoiceNo?: string;
   invoiceDate?: string;
+  /** null = xóa ngày thu tiền khi sửa */
+  paymentDate?: string | null;
   amount: number;
   status?: AcceptanceStatus;
   documentStatus?: DocumentStatus;
   paymentStatus?: AcceptancePaymentStatus;
   note?: string;
+};
+
+/** Dòng import từ file kế toán NT/thu */
+export type AccountingImportItem = AcceptancePayload & {
+  contractNo: string;
+  projectCode?: string;
+};
+
+export type AccountingImportResult = {
+  created: number;
+  updated: number;
+  failed: number;
+  errors: Array<{
+    contractNo: string;
+    acceptanceNo: string;
+    message: string;
+  }>;
+  warnings: Array<{ contractNo: string; message: string }>;
 };
 
 export type AcceptanceSchedulePayload = {
@@ -104,6 +130,22 @@ export const acceptancesApi = {
       method: 'POST',
       body: JSON.stringify({ items }),
     });
+  },
+
+  importAccounting(
+    items: AccountingImportItem[],
+    options?: { onlyContractNo?: string },
+  ) {
+    return apiFetch<AccountingImportResult>(
+      '/acceptances/import-accounting',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          items,
+          onlyContractNo: options?.onlyContractNo,
+        }),
+      },
+    );
   },
 
   update(id: string, payload: Partial<AcceptancePayload>) {

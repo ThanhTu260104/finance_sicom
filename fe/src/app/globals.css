@@ -21,3 +21,94 @@ body {
 .font-serif {
   font-family: var(--font-serif), ui-serif, Georgia, serif;
 }
+
+@keyframes login-ken-burns {
+  0% {
+    transform: scale(1.05) translate(0, 0);
+  }
+  50% {
+    transform: scale(1.12) translate(-1%, -1%);
+  }
+  100% {
+    transform: scale(1.05) translate(0, 0);
+  }
+}
+
+@keyframes login-float {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(24px, -20px);
+  }
+}
+
+@keyframes login-float-alt {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(-30px, 16px) scale(1.08);
+  }
+}
+
+@keyframes login-logo-in {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.92);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes login-card-in {
+  0% {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-login-ken-burns {
+  animation: login-ken-burns 28s ease-in-out infinite;
+}
+
+.login-orb {
+  animation: login-float 14s ease-in-out infinite;
+}
+
+.login-orb-b {
+  animation: login-float-alt 18s ease-in-out infinite;
+  animation-delay: -4s;
+}
+
+.login-orb-c {
+  animation: login-float 20s ease-in-out infinite;
+  animation-delay: -8s;
+}
+
+.login-logo-wrap {
+  animation: login-logo-in 0.9s ease-out both;
+}
+
+.login-card-enter {
+  animation: login-card-in 0.85s ease-out 0.15s both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-login-ken-burns,
+  .login-orb,
+  .login-orb-b,
+  .login-orb-c,
+  .login-logo-wrap,
+  .login-card-enter {
+    animation: none;
+  }
+}

@@ -73,4 +73,12 @@ export class CreateProjectDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  @ApiPropertyOptional({
+    description: 'Tên trưởng dự án — lưu phân công PROJECT_MANAGER',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  projectManagerName?: string;
 }

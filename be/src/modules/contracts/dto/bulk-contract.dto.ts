@@ -12,8 +12,9 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { BillingCycle, ContractStatus, ContractType } from '@prisma/client';
+import { BillingCycle, ContractKind, ContractStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
+import { IsContractTypes } from '../../../common/validators/is-contract-types.validator';
 
 export enum DeletedContractConflictAction {
   RESTORE = 'RESTORE',
@@ -30,6 +31,21 @@ export class BulkContractItemDto {
   @MaxLength(50)
   projectCode: string;
 
+  @ApiPropertyOptional({ example: 'SICOM', description: 'Mã công ty ký HĐ' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  companyCode?: string;
+
+  @ApiPropertyOptional({
+    example: 'TP001',
+    description: 'Mã thầu phụ / nhà cung cấp (bắt buộc với HĐ chi)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  counterpartyCode?: string;
+
   @ApiProperty({ example: '175/2026/HĐDV' })
   @IsString()
   @MinLength(1)
@@ -42,9 +58,12 @@ export class BulkContractItemDto {
   @MaxLength(255)
   name: string;
 
-  @ApiProperty({ enum: ContractType })
-  @IsEnum(ContractType)
-  contractType: ContractType;
+  @ApiProperty({ example: 'OPERATION;MAINTENANCE' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  @IsContractTypes()
+  contractType: string;
 
   @ApiProperty({ example: 7500000000 })
   @Type(() => Number)
@@ -88,6 +107,13 @@ export class BulkContractItemDto {
   @IsNumber()
   @Min(0)
   paymentTermDays?: number;
+
+  @ApiPropertyOptional({ example: 1, description: 'Thời hạn HĐ (năm)' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  durationYears?: number;
 }
 
 export class BulkContractDto {
@@ -97,6 +123,15 @@ export class BulkContractDto {
   @ValidateNested({ each: true })
   @Type(() => BulkContractItemDto)
   items: BulkContractItemDto[];
+
+  @ApiPropertyOptional({
+    enum: ContractKind,
+    default: ContractKind.INVESTOR,
+    description: 'Loại HĐ áp cho toàn bộ file (theo tab đang nhập)',
+  })
+  @IsOptional()
+  @IsEnum(ContractKind)
+  kind?: ContractKind;
 
   @ApiPropertyOptional({
     enum: DeletedContractConflictAction,

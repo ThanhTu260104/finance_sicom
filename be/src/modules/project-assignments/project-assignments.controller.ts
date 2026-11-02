@@ -14,6 +14,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ProjectAssignmentsService } from './project-assignments.service';
 import { CreateProjectAssignmentDto } from './dto/create-project-assignment.dto';
 import { UpdateProjectAssignmentDto } from './dto/update-project-assignment.dto';
+import { BulkProjectAssignmentDto } from './dto/bulk-project-assignment.dto';
 
 @ApiTags('project-assignments')
 @Controller()
@@ -35,6 +36,15 @@ export class ProjectAssignmentsController {
     @Body() dto: CreateProjectAssignmentDto,
   ) {
     return this.projectAssignmentsService.create(projectId, dto);
+  }
+
+  @Post('projects/:projectId/assignments/bulk')
+  @ApiOperation({ summary: 'Bulk upsert project assignments by employee code' })
+  bulkUpsert(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Body() dto: BulkProjectAssignmentDto,
+  ) {
+    return this.projectAssignmentsService.bulkUpsert(projectId, dto);
   }
 
   @Patch('project-assignments/:id')

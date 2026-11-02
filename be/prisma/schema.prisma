@@ -22,13 +22,6 @@ enum ProjectAssignmentRole {
   OTHER
 }
 
-enum ContractType {
-  MAINTENANCE
-  OPERATION
-  REPAIR
-  PROJECT
-}
-
 enum BillingCycle {
   MONTHLY
   BIMONTHLY
@@ -47,7 +40,39 @@ enum ContractStatus {
   CANCELLED
 }
 
+enum UserRole {
+  ADMIN
+  USER
+}
+
+/// FULL = dùng mọi tính năng (như trước); LIMITED = chỉ các tính năng trong `permissions`;
+/// READONLY = xem được mọi trang nhưng không thêm / sửa / xóa
+enum UserAccessMode {
+  FULL
+  LIMITED
+  READONLY
+}
+
 enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// Loại đối tác — một đối tác có thể mang nhiều loại
+enum PartnerType {
+  INVESTOR
+  SUBCONTRACTOR
+  SUPPLIER
+}
+
+/// Chiều hợp đồng: INVESTOR = thu tiền CĐT; SUBCONTRACTOR / SUPPLIER = chi tiền
+enum ContractKind {
+  INVESTOR
+  SUBCONTRACTOR
+  SUPPLIER
+}
+
+enum EmployeeStatus {
   ACTIVE
   INACTIVE
 }
@@ -79,10 +104,45 @@ enum ContractAttachmentKind {
   OTHER
 }
 
+enum AcceptanceAttachmentKind {
+  MINUTES
+  VOLUME
+  INVOICE
+}
+
 enum AcceptanceScheduleMethod {
   FIXED_AMOUNT
   PERCENT_OF_CONTRACT
   QUANTITY
+}
+
+/// Bình chọn ca khúc — chuyển đổi file
+enum MusicTrackConversionStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
+enum MusicTrackPublicStatus {
+  DRAFT
+  PUBLIC
+  HIDDEN
+}
+
+enum VotingCampaignStatus {
+  DRAFT
+  SCHEDULED
+  ACTIVE
+  CLOSED
+  ARCHIVED
+}
+
+/// Chỉ VALID mới tính vào thống kê server-side.
+enum VoteRecordStatus {
+  VALID
+  REJECTED
+  REVOKED
 }
 
 model Customer {
@@ -95,14 +155,68 @@ model Customer {
   contactPhone String?
   contactEmail String?
   status       CustomerStatus @default(ACTIVE)
+  partnerTypes PartnerType[]  @default([INVESTOR]) @map("partner_types")
   note         String?
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   deletedAt    DateTime?
 
-  projects Project[]
+  projects  Project[]
+  contracts Contract[] @relation("ContractCounterparty")
 
   @@map("customers")
+}
+
+/// Công ty ký hợp đồng (mỗi HĐ có thể do một công ty khác nhau ký)
+model Company {
+  id        String         @id @default(uuid()) @db.Uuid
+  code      String         @unique
+  name      String
+  taxCode   String?
+  address   String?
+  status    CustomerStatus @default(ACTIVE)
+  note      String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  deletedAt DateTime?
+
+  contracts Contract[]
+
+  @@map("companies")
+}
+
+/// Danh mục nhân sự (tuỳ chọn, không gắn trực tiếp phân bổ dự án)
+model Employee {
+  id        String         @id @default(uuid()) @db.Uuid
+  code      String         @unique
+  fullName  String
+  jobTitle  String?
+  status    EmployeeStatus @default(ACTIVE)
+  note      String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  deletedAt DateTime?
+
+  @@index([status])
+  @@map("employees")
+}
+
+/// Danh mục loại chi phí dự án (tuỳ chỉnh, dùng khi ghi bảng chi phí)
+model CostCategory {
+  id        String         @id @default(uuid()) @db.Uuid
+  code      String         @unique
+  name      String
+  sortOrder Int            @default(0)
+  status    EmployeeStatus @default(ACTIVE)
+  note      String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  deletedAt DateTime?
+
+  operatingCosts ProjectOperatingCost[]
+
+  @@index([status])
+  @@map("cost_categories")
 }
 
 model Project {
@@ -123,9 +237,11 @@ model Project {
   updatedAt   DateTime      @updatedAt
   deletedAt   DateTime?
 
-  customer    Customer?           @relation(fields: [customerId], references: [id])
-  assignments ProjectAssignment[]
-  contracts   Contract[]
+  customer          Customer?                 @relation(fields: [customerId], references: [id])
+  assignments       ProjectAssignment[]
+  operatingCosts    ProjectOperatingCost[]
+  contracts         Contract[]
+  reportSubmissions ProjectReportSubmission[]
 
   @@index([customerId])
   @@index([status])
@@ -133,52 +249,89 @@ model Project {
 }
 
 model ProjectAssignment {
-  id         String                @id @default(uuid()) @db.Uuid
-  projectId  String                @db.Uuid
-  employeeId String                @db.Uuid
-  role       ProjectAssignmentRole
-  startDate  DateTime?
-  endDate    DateTime?
-  isPrimary  Boolean               @default(false)
-  note       String?
-  createdAt  DateTime              @default(now())
-  updatedAt  DateTime              @updatedAt
+  id        String                @id @default(uuid()) @db.Uuid
+  projectId String                @db.Uuid
+  role      ProjectAssignmentRole
+  quantity  Int                   @default(1)
+  startDate DateTime?
+  endDate   DateTime?
+  note      String?
+  createdAt DateTime              @default(now())
+  updatedAt DateTime              @updatedAt
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
+  @@unique([projectId, role])
   @@index([projectId])
-  @@index([employeeId])
   @@map("project_assignments")
 }
 
+model ProjectOperatingCost {
+  id         String   @id @default(uuid()) @db.Uuid
+  projectId  String   @db.Uuid
+  categoryId String   @db.Uuid
+  /// Kỳ chi phí (YYYY-MM)
+  period     String
+  /// Mô tả ngắn (vd. phát sinh sửa chữa)
+  title      String?
+  amount     Decimal  @db.Decimal(18, 2)
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  project  Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category CostCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@index([projectId, period])
+  @@index([projectId])
+  @@index([categoryId])
+  @@index([period])
+  @@map("project_operating_costs")
+}
+
 model Contract {
-  id            String         @id @default(uuid()) @db.Uuid
-  projectId     String         @db.Uuid
-  contractNo    String         @unique
-  name          String
-  contractType  ContractType   @default(PROJECT)
-  contractValue Decimal        @db.Decimal(18, 2)
-  signedDate    DateTime?
-  startDate     DateTime?
-  endDate       DateTime?
+  id              String         @id @default(uuid()) @db.Uuid
+  projectId       String         @db.Uuid
+  kind            ContractKind   @default(INVESTOR)
+  /// Công ty ký HĐ
+  companyId       String?        @map("company_id") @db.Uuid
+  /// Thầu phụ / nhà cung cấp (HĐ CĐT lấy khách hàng từ dự án)
+  counterpartyId  String?        @map("counterparty_id") @db.Uuid
+  contractNo      String         @unique
+  name            String
+  /// Một hoặc nhiều loại, phân cách bằng ";" (vd. OPERATION;MAINTENANCE)
+  contractType    String         @default("PROJECT")
+  contractValue   Decimal        @db.Decimal(18, 2)
+  signedDate      DateTime?
+  startDate       DateTime?
+  endDate         DateTime?
   billingCycle    BillingCycle
   status          ContractStatus @default(DRAFT)
   /// Số ngày thanh toán sau ngày hóa đơn (ví dụ 60).
   paymentTermDays Int            @default(60)
+  /// Thời hạn hợp đồng (năm), nhập 1, 2, … — dùng với billingCycle để tính số lần NT
+  durationYears   Int?
   note            String?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
   deletedAt       DateTime?
 
-  project                   Project                    @relation(fields: [projectId], references: [id])
-  revenuePlans              RevenuePlan[]
-  acceptances               Acceptance[]
-  acceptanceSchedules       AcceptanceSchedule[]
-  collections               Collection[]
-  monthlyFinancials         ContractMonthlyFinancial[]
-  attachments               ContractAttachment[]
+  project                 Project                       @relation(fields: [projectId], references: [id])
+  company                 Company?                      @relation(fields: [companyId], references: [id])
+  counterparty            Customer?                     @relation("ContractCounterparty", fields: [counterpartyId], references: [id])
+  revenuePlans            RevenuePlan[]
+  acceptances             Acceptance[]
+  acceptanceSchedules     AcceptanceSchedule[]
+  collections             Collection[]
+  monthlyFinancials       ContractMonthlyFinancial[]
+  maintenanceDailyEntries ContractMaintenanceDaily[]
+  attachments             ContractAttachment[]
+  reportSubmissionLines   ProjectReportSubmissionLine[]
 
   @@index([projectId])
+  @@index([kind])
+  @@index([companyId])
+  @@index([counterpartyId])
   @@index([status])
   @@index([contractType])
   @@index([billingCycle])
@@ -187,26 +340,29 @@ model Contract {
 
 /// Planned acceptance milestone. Separate from the monthly execution plan.
 model AcceptanceSchedule {
-  id              String                   @id @default(uuid()) @db.Uuid
-  contractId      String                   @db.Uuid
-  sequence        Int
-  name            String
-  startPeriod     String?
-  endPeriod       String?
-  dueDate         DateTime?
-  method          AcceptanceScheduleMethod @default(FIXED_AMOUNT)
-  plannedAmount   Decimal?                 @db.Decimal(18, 2)
-  percentOfContract Decimal?               @db.Decimal(7, 4)
-  plannedQuantity Decimal?                 @db.Decimal(18, 3)
-  actualQuantity  Decimal?                 @db.Decimal(18, 3)
-  unit            String?
-  note            String?
-  createdAt       DateTime                 @default(now())
-  updatedAt       DateTime                 @updatedAt
-  deletedAt       DateTime?
+  id                String                   @id @default(uuid()) @db.Uuid
+  contractId        String                   @db.Uuid
+  sequence          Int
+  name              String
+  startPeriod       String?
+  endPeriod         String?
+  startDate         DateTime?
+  endDate           DateTime?
+  dueDate           DateTime?
+  method            AcceptanceScheduleMethod @default(FIXED_AMOUNT)
+  plannedAmount     Decimal?                 @db.Decimal(18, 2)
+  percentOfContract Decimal?                 @db.Decimal(7, 4)
+  plannedQuantity   Decimal?                 @db.Decimal(18, 3)
+  actualQuantity    Decimal?                 @db.Decimal(18, 3)
+  unit              String?
+  note              String?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+  deletedAt         DateTime?
 
-  contract        Contract                  @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  acceptances     Acceptance[]
+  contract     Contract      @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  acceptances  Acceptance[]
+  revenuePlans RevenuePlan[]
 
   @@unique([contractId, sequence])
   @@index([contractId])
@@ -236,15 +392,23 @@ model ContractAttachment {
 
 /// Planned acceptance/revenue amount per period (e.g. "2026-08").
 model RevenuePlan {
-  id            String   @id @default(uuid()) @db.Uuid
-  contractId    String   @db.Uuid
-  period        String
-  plannedAmount Decimal  @db.Decimal(18, 2)
-  note          String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                    String    @id @default(uuid()) @db.Uuid
+  contractId            String    @db.Uuid
+  period                String
+  /// Số đợt NT (1, 2, 3…)
+  batchSequence         Int?      @map("batch_sequence")
+  periodStartDate       DateTime? @map("period_start_date")
+  periodEndDate         DateTime? @map("period_end_date")
+  scheduleId            String?   @map("schedule_id") @db.Uuid
+  plannedAmount         Decimal   @db.Decimal(18, 2)
+  /// Hạn nộp HS / nghiệm thu dự kiến (dùng tính trễ kế hoạch trên dashboard)
+  plannedAcceptanceDate DateTime?
+  note                  String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  contract Contract            @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  schedule AcceptanceSchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
 
   @@unique([contractId, period])
   @@index([contractId])
@@ -253,26 +417,29 @@ model RevenuePlan {
 }
 
 model Acceptance {
-  id             String                   @id @default(uuid()) @db.Uuid
-  contractId     String                   @db.Uuid
-  scheduleId     String?                  @db.Uuid
+  id             String                  @id @default(uuid()) @db.Uuid
+  contractId     String                  @db.Uuid
+  scheduleId     String?                 @db.Uuid
   /// Đợt nghiệm thu (số đợt / số NT)
   acceptanceNo   String
   period         String
   acceptanceDate DateTime?
   invoiceNo      String?
   invoiceDate    DateTime?
-  amount         Decimal                  @db.Decimal(18, 2)
-  status         AcceptanceStatus         @default(DRAFT)
-  documentStatus DocumentStatus           @default(NOT_SUBMITTED)
-  paymentStatus  AcceptancePaymentStatus  @default(NOT_ACCEPTED)
+  /// Ngày thu tiền — ngày bên kia chuyển khoản
+  paymentDate    DateTime?
+  amount         Decimal                 @db.Decimal(18, 2)
+  status         AcceptanceStatus        @default(DRAFT)
+  documentStatus DocumentStatus          @default(NOT_SUBMITTED)
+  paymentStatus  AcceptancePaymentStatus @default(NOT_ACCEPTED)
   note           String?
-  createdAt      DateTime                 @default(now())
-  updatedAt      DateTime                 @updatedAt
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
   deletedAt      DateTime?
 
-  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
-  schedule AcceptanceSchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  contract    Contract               @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  schedule    AcceptanceSchedule?    @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  attachments AcceptanceAttachment[]
 
   @@index([contractId])
   @@index([scheduleId])
@@ -282,6 +449,26 @@ model Acceptance {
   @@index([paymentStatus])
   @@index([acceptanceNo])
   @@map("acceptances")
+}
+
+model AcceptanceAttachment {
+  id           String                   @id @default(uuid()) @db.Uuid
+  acceptanceId String                   @db.Uuid
+  kind         AcceptanceAttachmentKind @default(MINUTES)
+  fileName     String
+  storedName   String
+  mimeType     String
+  sizeBytes    Int
+  note         String?
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+  deletedAt    DateTime?
+
+  acceptance Acceptance @relation(fields: [acceptanceId], references: [id], onDelete: Cascade)
+
+  @@index([acceptanceId])
+  @@index([kind])
+  @@map("acceptance_attachments")
 }
 
 /// Actual cash collection per period — separate from acceptance.
@@ -305,6 +492,21 @@ model Collection {
   @@map("collections")
 }
 
+model AppUser {
+  id           String         @id @default(uuid()) @db.Uuid
+  displayName  String
+  email        String         @unique
+  passwordHash String
+  role         UserRole       @default(USER)
+  accessMode   UserAccessMode @default(FULL) @map("access_mode")
+  /// Mã tính năng được phép khi accessMode = LIMITED (vd. "contracts.create")
+  permissions  String[]       @default([])
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@map("app_users")
+}
+
 /// Monthly execution tracking — stores editable actual work; plan/acceptance/collection are aggregated.
 model ContractMonthlyFinancial {
   id               String   @id @default(uuid()) @db.Uuid
@@ -321,4 +523,222 @@ model ContractMonthlyFinancial {
   @@index([contractId])
   @@index([period])
   @@map("contract_monthly_financials")
+}
+
+/// Thực hiện HĐ bảo trì — nhập số theo từng ngày (YYYY-MM-DD).
+model ContractMaintenanceDaily {
+  id         String   @id @default(uuid()) @db.Uuid
+  contractId String   @db.Uuid
+  workDate   String
+  amount     Decimal  @default(0) @db.Decimal(18, 2)
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@unique([contractId, workDate])
+  @@index([contractId])
+  @@index([workDate])
+  @@map("contract_maintenance_daily")
+}
+
+enum ProjectReportSubmissionStatus {
+  SUBMITTED
+}
+
+enum ProjectReportFileStorage {
+  LOCAL
+  GOOGLE_DRIVE
+  R2
+}
+
+enum ProjectReportStagedUploadTarget {
+  LOCAL
+  R2
+}
+
+enum ProjectReportStagedFileStatus {
+  PENDING
+  UPLOADED
+}
+
+/// File tạm — client upload trực tiếp (PUT stream) trước khi nộp báo cáo JSON.
+model ProjectReportStagedFile {
+  id                String                          @id @default(uuid()) @db.Uuid
+  fileName          String
+  storedName        String
+  mimeType          String
+  expectedSizeBytes Int
+  sizeBytes         Int?
+  status            ProjectReportStagedFileStatus   @default(PENDING)
+  uploadTarget      ProjectReportStagedUploadTarget @default(LOCAL)
+  objectKey         String?
+  expiresAt         DateTime
+  createdAt         DateTime                        @default(now())
+
+  @@index([expiresAt])
+  @@map("project_report_staged_files")
+}
+
+/// Báo cáo nộp theo dự án — không cập nhật RevenuePlan hệ thống.
+model ProjectReportSubmission {
+  id          String                        @id @default(uuid()) @db.Uuid
+  projectId   String                        @db.Uuid
+  period      String
+  title       String?
+  note        String?
+  status      ProjectReportSubmissionStatus @default(SUBMITTED)
+  submittedAt DateTime                      @default(now())
+  createdAt   DateTime                      @default(now())
+  updatedAt   DateTime                      @updatedAt
+  deletedAt   DateTime?
+
+  project Project                       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lines   ProjectReportSubmissionLine[]
+  files   ProjectReportSubmissionFile[]
+
+  @@index([projectId, period])
+  @@index([projectId])
+  @@map("project_report_submissions")
+}
+
+model ProjectReportSubmissionLine {
+  id                          String   @id @default(uuid()) @db.Uuid
+  submissionId                String   @db.Uuid
+  contractId                  String   @db.Uuid
+  contractNo                  String
+  contractName                String
+  period                      String
+  reportedPlannedAmount       Decimal  @db.Decimal(18, 2)
+  systemPlannedAmountSnapshot Decimal? @db.Decimal(18, 2)
+  note                        String?
+
+  submission ProjectReportSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  contract   Contract                @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+  @@index([contractId])
+  @@map("project_report_submission_lines")
+}
+
+model ProjectReportSubmissionFile {
+  id           String                   @id @default(uuid()) @db.Uuid
+  submissionId String                   @db.Uuid
+  fileName     String
+  storedName   String
+  mimeType     String
+  sizeBytes    Int
+  storage      ProjectReportFileStorage @default(LOCAL)
+  externalUrl  String?
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+  deletedAt    DateTime?
+
+  submission ProjectReportSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+  @@map("project_report_submission_files")
+}
+
+/// Ca khúc / track (bình chọn).
+model MusicTrack {
+  id               String                     @id @default(uuid()) @db.Uuid
+  songCode         String                     @unique @map("song_code")
+  contestantCode   String                     @map("contestant_code")
+  performerName    String                     @map("performer_name")
+  authorName       String                     @map("author_name")
+  songTitle        String                     @map("song_title")
+  originalFilePath String?                    @map("original_file_path")
+  mp3FilePath      String?                    @map("mp3_file_path")
+  mimeType         String?                    @map("mime_type")
+  fileSizeBytes    BigInt?                    @map("file_size_bytes")
+  conversionStatus MusicTrackConversionStatus @default(PENDING) @map("conversion_status")
+  publicStatus     MusicTrackPublicStatus     @default(DRAFT) @map("public_status")
+  displayOrder     Int                        @default(0) @map("display_order")
+  createdById      String?                    @map("created_by_id") @db.Uuid
+  createdAt        DateTime                   @default(now()) @map("created_at")
+  updatedAt        DateTime                   @updatedAt @map("updated_at")
+
+  campaignLinks VotingCampaignTrack[]
+  votes         Vote[]
+
+  @@index([contestantCode])
+  @@index([publicStatus, displayOrder])
+  @@map("music_tracks")
+}
+
+model VotingCampaign {
+  id                  String               @id @default(uuid()) @db.Uuid
+  name                String
+  description         String?
+  startAt             DateTime             @map("start_at")
+  endAt               DateTime             @map("end_at")
+  status              VotingCampaignStatus @default(DRAFT)
+  maxTracksPerBallot  Int                  @default(0) @map("max_tracks_per_ballot")
+  resultPublishConfig Json?                @map("result_publish_config")
+  createdById         String?              @map("created_by_id") @db.Uuid
+  createdAt           DateTime             @default(now()) @map("created_at")
+  updatedAt           DateTime             @updatedAt @map("updated_at")
+
+  tracks VotingCampaignTrack[]
+  votes  Vote[]
+  voters VotingCampaignVoter[]
+
+  @@index([status, startAt, endAt])
+  @@map("voting_campaigns")
+}
+
+/// Nhân viên được phép bình chọn trong đợt (import Excel).
+model VotingCampaignVoter {
+  id           String   @id @default(uuid()) @db.Uuid
+  campaignId   String   @map("campaign_id") @db.Uuid
+  employeeCode String   @map("employee_code")
+  fullName     String?  @map("full_name")
+  email        String?  @map("email")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  campaign VotingCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, employeeCode])
+  @@unique([campaignId, email])
+  @@index([campaignId])
+  @@map("voting_campaign_voters")
+}
+
+model VotingCampaignTrack {
+  id           String   @id @default(uuid()) @db.Uuid
+  campaignId   String   @map("campaign_id") @db.Uuid
+  trackId      String   @map("track_id") @db.Uuid
+  displayOrder Int      @default(0) @map("display_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  campaign VotingCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  track    MusicTrack     @relation(fields: [trackId], references: [id], onDelete: Restrict)
+
+  @@unique([campaignId, trackId])
+  @@index([campaignId, displayOrder])
+  @@map("voting_campaign_tracks")
+}
+
+/// Phiếu bình chọn — nguồn duy nhất cho thống kê (không tin số liệu FE gửi).
+model Vote {
+  id           String           @id @default(uuid()) @db.Uuid
+  campaignId   String           @map("campaign_id") @db.Uuid
+  trackId      String           @map("track_id") @db.Uuid
+  status       VoteRecordStatus @default(VALID)
+  voterKey     String           @map("voter_key")
+  employeeCode String?          @map("employee_code")
+  ipAddress    String?          @map("ip_address")
+  userAgent    String?          @map("user_agent")
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  campaign VotingCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  track    MusicTrack     @relation(fields: [trackId], references: [id], onDelete: Restrict)
+
+  @@index([campaignId, trackId, status])
+  @@index([campaignId, voterKey])
+  @@index([campaignId, employeeCode])
+  @@index([campaignId, createdAt])
+  @@map("votes")
 }

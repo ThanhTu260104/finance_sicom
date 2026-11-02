@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   MaxLength,
   Min,
@@ -22,6 +23,11 @@ import { Type } from 'class-transformer';
 import { PERIOD_REGEX } from '../../../common/constants/period';
 
 export class BulkAcceptanceItemDto {
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  scheduleId?: string;
+
   @ApiProperty({ example: 'Đợt 08/2026' })
   @IsString()
   @MinLength(1)
@@ -54,6 +60,11 @@ export class BulkAcceptanceItemDto {
   @IsOptional()
   @IsDateString()
   invoiceDate?: string;
+
+  @ApiPropertyOptional({ type: String, format: 'date-time' })
+  @IsOptional()
+  @IsDateString()
+  paymentDate?: string;
 
   @ApiPropertyOptional({ enum: AcceptanceStatus })
   @IsOptional()

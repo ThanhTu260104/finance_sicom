@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { CustomerStatus } from '@prisma/client';
+import { CustomerStatus, PartnerType } from '@prisma/client';
 import { IsEnum, IsOptional } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
 
@@ -8,4 +8,9 @@ export class QueryCustomerDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(CustomerStatus)
   status?: CustomerStatus;
+
+  @ApiPropertyOptional({ enum: PartnerType })
+  @IsOptional()
+  @IsEnum(PartnerType)
+  partnerType?: PartnerType;
 }

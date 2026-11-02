@@ -1,0 +1,59 @@
+@keyframes sicom15-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes sicom15-wave {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes sicom15-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.75;
+  }
+}
+
+.sicom15-enter {
+  animation: sicom15-fade-up 0.65s ease-out both;
+}
+
+.sicom15-enter-delay-1 {
+  animation-delay: 0.08s;
+}
+
+.sicom15-enter-delay-2 {
+  animation-delay: 0.16s;
+}
+
+.sicom15-wave-bar {
+  transform-origin: bottom;
+  animation: sicom15-wave 0.85s ease-in-out infinite;
+}
+
+.sicom15-hero-glow {
+  animation: sicom15-glow-pulse 4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sicom15-enter,
+  .sicom15-wave-bar,
+  .sicom15-hero-glow {
+    animation: none !important;
+  }
+}

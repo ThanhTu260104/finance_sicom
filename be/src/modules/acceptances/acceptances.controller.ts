@@ -11,10 +11,13 @@ import {
   Post,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { UserRole } from '@prisma/client';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { AcceptancesService } from './acceptances.service';
 import { CreateAcceptanceDto } from './dto/create-acceptance.dto';
 import { UpdateAcceptanceDto } from './dto/update-acceptance.dto';
 import { BulkAcceptanceDto } from './dto/bulk-acceptance.dto';
+import { AccountingImportDto } from './dto/accounting-import.dto';
 
 @ApiTags('acceptances')
 @Controller()
@@ -49,6 +52,16 @@ export class AcceptancesController {
     @Body() dto: BulkAcceptanceDto,
   ) {
     return this.acceptancesService.bulkUpsert(contractId, dto);
+  }
+
+  @Post('acceptances/import-accounting')
+  // Import file kế toán (nhiều HĐ cùng lúc) — chỉ quản trị
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({
+    summary: 'Import nghiệm thu từ bảng kế toán (nhiều hợp đồng)',
+  })
+  importAccounting(@Body() dto: AccountingImportDto) {
+    return this.acceptancesService.importAccounting(dto);
   }
 
   @Patch('acceptances/:id')

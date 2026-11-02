@@ -39,6 +39,25 @@ export function compareDecimals(
   return result;
 }
 
+/** Chia đều total thành count phần; phần cuối hút lệch làm tròn. */
+export function splitDecimalEqually(
+  total: Decimal | string | number,
+  count: number,
+): Decimal[] {
+  if (count <= 0) return [];
+  const t = new Decimal(total);
+  if (count === 1) return [t];
+  const per = t.div(count).toDecimalPlaces(2, Decimal.ROUND_DOWN);
+  const out: Decimal[] = [];
+  let allocated = new Decimal(0);
+  for (let i = 0; i < count - 1; i++) {
+    out.push(per);
+    allocated = allocated.add(per);
+  }
+  out.push(t.sub(allocated));
+  return out;
+}
+
 export function isNegativeDecimal(value: Decimal | string | number): boolean {
   return new Decimal(value).isNegative() && !new Decimal(value).isZero();
 }

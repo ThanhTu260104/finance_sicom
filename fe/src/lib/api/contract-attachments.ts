@@ -1,8 +1,5 @@
 import type { ContractAttachment, ContractAttachmentKind } from '@/lib/types';
-import { apiFetch } from './client';
-
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3002/api/v1';
+import { API_URL, apiFetch } from './client';
 
 export type UploadContractAttachmentPayload = {
   file: File;
@@ -29,6 +26,7 @@ export const contractAttachmentsApi = {
       {
         method: 'POST',
         body: form,
+        timeoutMs: 120_000,
       },
     );
   },

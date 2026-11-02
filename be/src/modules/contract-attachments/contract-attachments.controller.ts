@@ -16,6 +16,10 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { memoryStorage } from 'multer';
+import { FEATURES } from '../../common/constants/features';
+import { AllowFeature } from '../../common/decorators/feature.decorator';
+import { MAX_UPLOAD_FILE_SIZE } from '../../common/constants/upload.constants';
+import { contentDispositionAttachment } from '../../common/utils/filename-encoding.util';
 import { ContractAttachmentsService } from './contract-attachments.service';
 import { UploadContractAttachmentDto } from './dto/upload-contract-attachment.dto';
 
@@ -33,12 +37,14 @@ export class ContractAttachmentsController {
   }
 
   @Post('contracts/:contractId/attachments')
+  // Form "Thêm hợp đồng" đính kèm file PDF ngay sau khi tạo HĐ
+  @AllowFeature(FEATURES.CONTRACTS_CREATE)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload attachment for a contract' })
   @UseInterceptors(
     FileInterceptor('file', {
       storage: memoryStorage(),
-      limits: { fileSize: 20 * 1024 * 1024 },
+      limits: { fileSize: MAX_UPLOAD_FILE_SIZE },
     }),
   )
   upload(
@@ -51,17 +57,11 @@ export class ContractAttachmentsController {
 
   @Get('attachments/:id/download')
   @ApiOperation({ summary: 'Download attachment file' })
-  async download(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Res() res: Response,
-  ) {
+  async download(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
     const { stream, fileName, mimeType } =
       await this.contractAttachmentsService.getDownloadStream(id);
     res.setHeader('Content-Type', mimeType);
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${encodeURIComponent(fileName)}"`,
-    );
+    res.setHeader('Content-Disposition', contentDispositionAttachment(fileName));
     stream.pipe(res);
   }
 

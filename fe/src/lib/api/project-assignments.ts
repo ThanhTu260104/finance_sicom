@@ -2,11 +2,18 @@ import type { ProjectAssignment, ProjectAssignmentRole } from '@/lib/types';
 import { apiFetch } from './client';
 
 export type AssignmentPayload = {
-  employeeId: string;
   role: ProjectAssignmentRole;
+  quantity?: number;
   startDate?: string;
   endDate?: string;
-  isPrimary?: boolean;
+  note?: string;
+};
+
+export type AssignmentBulkItem = {
+  role: ProjectAssignmentRole;
+  quantity?: number;
+  startDate?: string;
+  endDate?: string;
   note?: string;
 };
 
@@ -25,6 +32,18 @@ export const projectAssignmentsApi = {
         body: JSON.stringify(payload),
       },
     );
+  },
+
+  bulkUpsert(projectId: string, items: AssignmentBulkItem[]) {
+    return apiFetch<{
+      count: number;
+      created: number;
+      updated: number;
+      data: ProjectAssignment[];
+    }>(`/projects/${projectId}/assignments/bulk`, {
+      method: 'POST',
+      body: JSON.stringify({ items }),
+    });
   },
 
   update(id: string, payload: Partial<AssignmentPayload>) {

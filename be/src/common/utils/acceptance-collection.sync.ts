@@ -12,6 +12,16 @@ export function autoCollectionNo(acceptanceId: string) {
   return `NT/${acceptanceId}`;
 }
 
+/** Thu tự động gắn với một đợt NT cụ thể (NT/{acceptanceId}). */
+export function acceptanceIdFromAutoCollectionNo(
+  collectionNo: string,
+): string | null {
+  const prefix = 'NT/';
+  if (!collectionNo.startsWith(prefix)) return null;
+  const id = collectionNo.slice(prefix.length).trim();
+  return id.length > 0 ? id : null;
+}
+
 /**
  * NT chọn Đã thu → tạo/cập nhật thu tiền tự động (bù phần chưa cover).
  * Bỏ Đã thu / chưa nộp HS → xóa thu tiền tự động NT/{id}.
@@ -96,6 +106,10 @@ async function computeAutoCollectionShortfall(
       NOT: { collectionNo: autoCollectionNo(acceptance.id) },
     },
   });
+  /** Chỉ thu tay (không NT/{id}) mới dùng chung FIFO; thu NT đợt khác gắn riêng đợt đó. */
+  const manualCollections = collections.filter(
+    (c) => !acceptanceIdFromAutoCollectionNo(c.collectionNo),
+  );
   const acceptances = await prisma.acceptance.findMany({
     where: {
       contractId: acceptance.contractId,
@@ -110,7 +124,7 @@ async function computeAutoCollectionShortfall(
     ],
   });
 
-  let remaining = sumDecimals(collections.map((c) => c.amount));
+  let remaining = sumDecimals(manualCollections.map((c) => c.amount));
   for (const row of acceptances) {
     const amount = new Decimal(row.amount);
     if (row.id === acceptance.id) {
@@ -127,7 +141,8 @@ async function computeAutoCollectionShortfall(
 }
 
 /**
- * Suy paymentStatus từ thu tiền thực tế theo kỳ (FIFO trong từng kỳ).
+ * Suy paymentStatus từ thu tiền thực tế theo kỳ.
+ * Thu NT/{id} gắn trực tiếp đợt đó; phần còn lại phân bổ FIFO trong kỳ.
  */
 export async function deriveAcceptancePaymentStatuses(
   prisma: PrismaClient,
@@ -148,13 +163,32 @@ export async function deriveAcceptancePaymentStatuses(
     }),
   ]);
 
-  const collectedByPeriod = new Map<string, Decimal>();
+  const collectionsByPeriod = new Map<string, typeof collections>();
   for (const row of collections) {
-    const prev = collectedByPeriod.get(row.period) ?? new Decimal(0);
-    collectedByPeriod.set(row.period, prev.add(row.amount));
+    const list = collectionsByPeriod.get(row.period) ?? [];
+    list.push(row);
+    collectionsByPeriod.set(row.period, list);
   }
 
-  const remainingByPeriod = new Map(collectedByPeriod);
+  const acceptancesByPeriod = new Map<string, typeof acceptances>();
+  for (const row of acceptances) {
+    const list = acceptancesByPeriod.get(row.period) ?? [];
+    list.push(row);
+    acceptancesByPeriod.set(row.period, list);
+  }
+
+  const fifoOrder = (
+    a: (typeof acceptances)[number],
+    b: (typeof acceptances)[number],
+  ) => {
+    const ad = a.acceptanceDate?.getTime() ?? 0;
+    const bd = b.acceptanceDate?.getTime() ?? 0;
+    if (ad !== bd) return ad - bd;
+    const ac = a.createdAt.getTime();
+    const bc = b.createdAt.getTime();
+    if (ac !== bc) return ac - bc;
+    return a.acceptanceNo.localeCompare(b.acceptanceNo, 'vi');
+  };
 
   for (const row of acceptances) {
     if (row.documentStatus === DocumentStatus.NOT_SUBMITTED) {
@@ -172,32 +206,57 @@ export async function deriveAcceptancePaymentStatuses(
       }
       continue;
     }
+  }
 
-    let remaining = remainingByPeriod.get(row.period) ?? new Decimal(0);
-    const amount = new Decimal(row.amount);
-    const collected =
-      compareDecimals(remaining, amount) >= 0
-        ? AcceptancePaymentStatus.COLLECTED
-        : AcceptancePaymentStatus.WAITING_CLIENT_PAYMENT;
+  for (const [period, periodAcceptances] of acceptancesByPeriod) {
+    const periodRows = periodAcceptances.filter(
+      (r) => r.documentStatus === DocumentStatus.SUBMITTED_UNPAID,
+    );
+    if (!periodRows.length) continue;
 
-    if (collected === AcceptancePaymentStatus.COLLECTED) {
-      remaining = remaining.sub(amount);
-    } else {
-      remaining = new Decimal(0);
+    const pinned = new Map<string, Decimal>();
+    let sharedPool = new Decimal(0);
+    for (const c of collectionsByPeriod.get(period) ?? []) {
+      const linkedId = acceptanceIdFromAutoCollectionNo(c.collectionNo);
+      if (linkedId) {
+        const prev = pinned.get(linkedId) ?? new Decimal(0);
+        pinned.set(linkedId, prev.add(c.amount));
+      } else {
+        sharedPool = sharedPool.add(c.amount);
+      }
     }
-    remainingByPeriod.set(row.period, remaining);
 
-    if (
-      row.paymentStatus !== collected ||
-      row.status === AcceptanceStatus.DRAFT
-    ) {
-      await prisma.acceptance.update({
-        where: { id: row.id },
-        data: {
-          paymentStatus: collected,
-          status: AcceptanceStatus.APPROVED,
-        },
-      });
+    const sorted = [...periodRows].sort(fifoOrder);
+
+    for (const row of sorted) {
+      const amount = new Decimal(row.amount);
+      let covered = pinned.get(row.id) ?? new Decimal(0);
+      let need = amount.sub(covered);
+
+      if (compareDecimals(need, 0) > 0) {
+        const fromPool = Decimal.min(need, sharedPool);
+        covered = covered.add(fromPool);
+        sharedPool = sharedPool.sub(fromPool);
+        need = amount.sub(covered);
+      }
+
+      const collected =
+        compareDecimals(need, 0) <= 0
+          ? AcceptancePaymentStatus.COLLECTED
+          : AcceptancePaymentStatus.WAITING_CLIENT_PAYMENT;
+
+      if (
+        row.paymentStatus !== collected ||
+        row.status === AcceptanceStatus.DRAFT
+      ) {
+        await prisma.acceptance.update({
+          where: { id: row.id },
+          data: {
+            paymentStatus: collected,
+            status: AcceptanceStatus.APPROVED,
+          },
+        });
+      }
     }
   }
 }

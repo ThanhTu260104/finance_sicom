@@ -12,6 +12,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { useCanWrite } from '@/components/auth/auth-provider';
 
 export function ConfirmDeleteButton({
   onConfirm,
@@ -24,6 +25,7 @@ export function ConfirmDeleteButton({
   title?: string;
   description?: string;
 }) {
+  if (!useCanWrite()) return null;
   return (
     <AlertDialog>
       <AlertDialogTrigger asChild>

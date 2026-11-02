@@ -1,4 +1,9 @@
-import type { Customer, CustomerStatus, PaginatedResponse } from '@/lib/types';
+import type {
+  Customer,
+  CustomerStatus,
+  PaginatedResponse,
+  PartnerType,
+} from '@/lib/types';
 import { apiFetch, buildQuery } from './client';
 
 export type CustomerListParams = {
@@ -6,6 +11,7 @@ export type CustomerListParams = {
   limit?: number;
   search?: string;
   status?: CustomerStatus | '';
+  partnerType?: PartnerType;
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
 };
@@ -19,6 +25,7 @@ export type CustomerPayload = {
   contactPhone?: string;
   contactEmail?: string;
   status?: CustomerStatus;
+  partnerTypes?: PartnerType[];
   note?: string;
 };
 

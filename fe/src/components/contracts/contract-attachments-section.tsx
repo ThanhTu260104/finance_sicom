@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Download, FileText, Upload } from 'lucide-react';
+import { Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { contractAttachmentsApi } from '@/lib/api';
 import { formatDate } from '@/lib/format';
@@ -10,13 +10,14 @@ import {
   CONTRACT_ATTACHMENT_KINDS,
   contractAttachmentKindLabel,
 } from '@/lib/types';
-import { ConfirmDeleteButton } from '@/components/shared/confirm-delete-button';
+import { AttachmentFileActions } from '@/components/shared/attachment-file-actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { WriteOnly } from '@/components/auth/auth-provider';
 
 function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -66,6 +67,7 @@ export function ContractAttachmentsSection({
       toast.error('Chọn tệp để tải lên');
       return;
     }
+    if (uploading) return;
     setUploading(true);
     try {
       await contractAttachmentsApi.upload(contractId, {
@@ -77,12 +79,14 @@ export function ContractAttachmentsSection({
       setSelectedFile(null);
       setNote('');
       if (fileInputRef.current) fileInputRef.current.value = '';
-      await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Tải lên thất bại');
+      toast.error(err instanceof Error ? err.message : 'Tải lên thất bại', {
+        duration: 8000,
+      });
     } finally {
       setUploading(false);
     }
+    await load();
   };
 
   const handleDelete = async (id: string) => {
@@ -106,66 +110,68 @@ export function ContractAttachmentsSection({
       <CardHeader>
         <CardTitle className="text-base">Tệp đính kèm hợp đồng</CardTitle>
         <p className="text-sm text-slate-500">
-          PDF, Word, Excel, hình ảnh — tối đa 20MB mỗi tệp
+          PDF, Word, Excel, hình ảnh — tối đa 1GB mỗi tệp
         </p>
       </CardHeader>
       <CardContent className="space-y-6">
-        <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4">
-          <p className="mb-3 text-sm font-medium text-slate-800">
-            Tải lên tệp mới
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="attachment-kind">Loại tệp</Label>
-              <Select
-                id="attachment-kind"
-                value={kind}
-                onChange={(e) =>
-                  setKind(e.target.value as ContractAttachmentKind)
-                }
-              >
-                {CONTRACT_ATTACHMENT_KINDS.map((k) => (
-                  <option key={k} value={k}>
-                    {contractAttachmentKindLabel[k]}
-                  </option>
-                ))}
-              </Select>
+        <WriteOnly>
+          <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4">
+            <p className="mb-3 text-sm font-medium text-slate-800">
+              Tải lên tệp mới
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="attachment-kind">Loại tệp</Label>
+                <Select
+                  id="attachment-kind"
+                  value={kind}
+                  onChange={(e) =>
+                    setKind(e.target.value as ContractAttachmentKind)
+                  }
+                >
+                  {CONTRACT_ATTACHMENT_KINDS.map((k) => (
+                    <option key={k} value={k}>
+                      {contractAttachmentKindLabel[k]}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor="attachment-file">Chọn tệp</Label>
+                <Input
+                  id="attachment-file"
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
+                  onChange={(e) =>
+                    setSelectedFile(e.target.files?.[0] ?? null)
+                  }
+                />
+              </div>
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  className="w-full"
+                  disabled={uploading || !selectedFile}
+                  onClick={() => void handleUpload()}
+                >
+                  <Upload className="h-4 w-4" />
+                  {uploading ? 'Đang tải...' : 'Tải lên'}
+                </Button>
+              </div>
             </div>
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label htmlFor="attachment-file">Chọn tệp</Label>
-              <Input
-                id="attachment-file"
-                ref={fileInputRef}
-                type="file"
-                accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg"
-                onChange={(e) =>
-                  setSelectedFile(e.target.files?.[0] ?? null)
-                }
+            <div className="mt-3 space-y-1.5">
+              <Label htmlFor="attachment-note">Ghi chú (tuỳ chọn)</Label>
+              <Textarea
+                id="attachment-note"
+                rows={2}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Mô tả ngắn về tệp..."
               />
             </div>
-            <div className="flex items-end">
-              <Button
-                type="button"
-                className="w-full"
-                disabled={uploading || !selectedFile}
-                onClick={() => void handleUpload()}
-              >
-                <Upload className="h-4 w-4" />
-                {uploading ? 'Đang tải...' : 'Tải lên'}
-              </Button>
-            </div>
           </div>
-          <div className="mt-3 space-y-1.5">
-            <Label htmlFor="attachment-note">Ghi chú (tuỳ chọn)</Label>
-            <Textarea
-              id="attachment-note"
-              rows={2}
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Mô tả ngắn về tệp..."
-            />
-          </div>
-        </div>
+        </WriteOnly>
 
         {loading ? (
           <p className="text-sm text-slate-500">Đang tải danh sách tệp...</p>
@@ -182,42 +188,25 @@ export function ContractAttachmentsSection({
                     </h4>
                     <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
                       {group.files.map((file) => (
-                        <li
-                          key={file.id}
-                          className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between"
-                        >
-                          <div className="flex min-w-0 items-start gap-2">
-                            <FileText className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-medium text-slate-900">
-                                {file.fileName}
-                              </p>
-                              <p className="text-xs text-slate-500">
+                        <li key={file.id} className="px-3 py-2.5">
+                          <AttachmentFileActions
+                            file={{
+                              id: file.id,
+                              fileName: file.fileName,
+                              mimeType: file.mimeType,
+                            }}
+                            downloadPath={`/attachments/${file.id}/download`}
+                            meta={
+                              <>
                                 {formatFileSize(file.sizeBytes)} ·{' '}
                                 {formatDate(file.createdAt)}
                                 {file.note ? ` · ${file.note}` : ''}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex shrink-0 gap-2">
-                            <Button asChild size="sm" variant="outline">
-                              <a
-                                href={contractAttachmentsApi.downloadUrl(
-                                  file.id,
-                                )}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                              >
-                                <Download className="h-4 w-4" />
-                                Tải về
-                              </a>
-                            </Button>
-                            <ConfirmDeleteButton
-                              onConfirm={() => handleDelete(file.id)}
-                              title="Xóa tệp?"
-                              description={`Xóa "${file.fileName}" khỏi hợp đồng.`}
-                            />
-                          </div>
+                              </>
+                            }
+                            onDelete={() => void handleDelete(file.id)}
+                            deleteTitle="Xóa tệp?"
+                            deleteDescription={`Xóa "${file.fileName}" khỏi hợp đồng.`}
+                          />
                         </li>
                       ))}
                     </ul>

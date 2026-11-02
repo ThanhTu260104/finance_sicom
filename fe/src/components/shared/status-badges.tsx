@@ -1,4 +1,5 @@
 import { Badge } from '@/components/ui/badge';
+import { useContractFlowLabels } from '@/lib/contract-kind';
 import type {
   AcceptanceStatus,
   AcceptancePaymentStatus,
@@ -7,6 +8,7 @@ import type {
   ContractStatus,
   ContractType,
   CustomerStatus,
+  EmployeeStatus,
   DocumentStatus,
   ProjectAssignmentRole,
   ProjectStatus,
@@ -47,6 +49,14 @@ export function CustomerStatusBadge({ status }: { status: CustomerStatus }) {
   return (
     <Badge variant={status === 'ACTIVE' ? 'success' : 'muted'}>
       {status === 'ACTIVE' ? 'Hoạt động' : 'Ngừng'}
+    </Badge>
+  );
+}
+
+export function EmployeeStatusBadge({ status }: { status: EmployeeStatus }) {
+  return (
+    <Badge variant={status === 'ACTIVE' ? 'success' : 'muted'}>
+      {status === 'ACTIVE' ? 'Đang làm' : 'Ngừng'}
     </Badge>
   );
 }
@@ -176,9 +186,10 @@ export function AcceptanceStatusBadge({
 }
 
 export function DocumentStatusBadge({ status }: { status: DocumentStatus }) {
+  const flow = useContractFlowLabels();
   return (
     <Badge variant={status === 'SUBMITTED_UNPAID' ? 'success' : 'warning'}>
-      {documentStatusLabel[status]}
+      {status === 'SUBMITTED_UNPAID' ? flow.docSubmitted : flow.docNotSubmitted}
     </Badge>
   );
 }
@@ -188,16 +199,17 @@ export function AcceptancePaymentStatusBadge({
 }: {
   status: AcceptancePaymentStatus;
 }) {
+  const flow = useContractFlowLabels();
   const map: Record<
     AcceptancePaymentStatus,
     { label: string; variant: 'muted' | 'success' | 'warning' | 'danger' | 'default' }
   > = {
     NOT_ACCEPTED: { label: 'Chưa nghiệm thu', variant: 'muted' },
     WAITING_CLIENT_PAYMENT: {
-      label: 'Chờ CĐT thanh toán',
+      label: flow.waitingPayment,
       variant: 'danger',
     },
-    COLLECTED: { label: 'Đã thu tiền', variant: 'success' },
+    COLLECTED: { label: flow.cashedFull, variant: 'success' },
   };
   const item = map[status];
   return <Badge variant={item.variant}>{item.label}</Badge>;

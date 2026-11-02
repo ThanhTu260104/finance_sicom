@@ -20,10 +20,21 @@ import { Type } from 'class-transformer';
 import { PERIOD_REGEX } from '../../../common/constants/period';
 
 export class CreateAcceptanceDto {
-  @ApiPropertyOptional({ format: 'uuid', description: 'Scheduled acceptance milestone' })
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Scheduled acceptance milestone',
+  })
   @IsOptional()
   @IsUUID()
   scheduleId?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description: 'Dòng kế hoạch nghiệm thu đã chọn trên form',
+  })
+  @IsOptional()
+  @IsUUID()
+  revenuePlanId?: string;
 
   @ApiProperty({ example: 'Đợt 08/2026', description: 'Đợt nghiệm thu' })
   @IsString()
@@ -53,6 +64,15 @@ export class CreateAcceptanceDto {
   @IsOptional()
   @IsDateString()
   invoiceDate?: string;
+
+  @ApiPropertyOptional({
+    type: String,
+    format: 'date-time',
+    description: 'Ngày thu tiền (ngày bên kia chuyển khoản)',
+  })
+  @IsOptional()
+  @IsDateString()
+  paymentDate?: string | null;
 
   @ApiProperty({ example: 2000000000 })
   @Type(() => Number)

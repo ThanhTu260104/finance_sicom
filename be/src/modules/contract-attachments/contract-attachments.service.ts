@@ -7,10 +7,13 @@ import { ContractAttachmentKind } from '@prisma/client';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { createReadStream, existsSync } from 'fs';
+import { fixUtf8Filename } from '../../common/utils/filename-encoding.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import {
+  MAX_UPLOAD_FILE_SIZE,
+  MAX_UPLOAD_FILE_SIZE_LABEL,
+} from '../../common/constants/upload.constants';
 import { UploadContractAttachmentDto } from './dto/upload-contract-attachment.dto';
-
-const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -36,7 +39,11 @@ const ALLOWED_EXTENSIONS = new Set([
 
 @Injectable()
 export class ContractAttachmentsService {
-  private readonly uploadsRoot = path.join(process.cwd(), 'uploads', 'contracts');
+  private readonly uploadsRoot = path.join(
+    process.cwd(),
+    'uploads',
+    'contracts',
+  );
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -54,8 +61,10 @@ export class ContractAttachmentsService {
     if (!file) {
       throw new BadRequestException('File is required');
     }
-    if (file.size > MAX_FILE_SIZE) {
-      throw new BadRequestException('File size must not exceed 20MB');
+    if (file.size > MAX_UPLOAD_FILE_SIZE) {
+      throw new BadRequestException(
+        `File size must not exceed ${MAX_UPLOAD_FILE_SIZE_LABEL}`,
+      );
     }
 
     const ext = path.extname(file.originalname).toLowerCase();
@@ -93,7 +102,7 @@ export class ContractAttachmentsService {
       id: row.id,
       contractId: row.contractId,
       kind: row.kind,
-      fileName: row.fileName,
+      fileName: fixUtf8Filename(row.fileName),
       mimeType: row.mimeType,
       sizeBytes: row.sizeBytes,
       note: row.note,
@@ -122,7 +131,8 @@ export class ContractAttachmentsService {
     const dir = this.contractDir(contractId);
     await fs.mkdir(dir, { recursive: true });
 
-    const ext = path.extname(file.originalname).toLowerCase();
+    const displayName = fixUtf8Filename(file.originalname);
+    const ext = path.extname(displayName).toLowerCase();
     const storedName = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}${ext}`;
     const targetPath = path.join(dir, storedName);
     await fs.writeFile(targetPath, file.buffer);
@@ -131,7 +141,7 @@ export class ContractAttachmentsService {
       data: {
         contractId,
         kind: dto.kind,
-        fileName: file.originalname,
+        fileName: displayName,
         storedName,
         mimeType: file.mimetype || 'application/octet-stream',
         sizeBytes: file.size,
@@ -160,7 +170,7 @@ export class ContractAttachmentsService {
 
     return {
       stream: createReadStream(filePath),
-      fileName: attachment.fileName,
+      fileName: fixUtf8Filename(attachment.fileName),
       mimeType: attachment.mimeType,
     };
   }

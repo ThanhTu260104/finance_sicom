@@ -3,6 +3,7 @@ import type {
   MonthlyFinancial,
   RevenuePlan,
 } from '@/lib/types';
+import type { RevenuePlanPayload } from '@/lib/api/finance';
 import { apiFetch } from './client';
 
 export type MonthlyFinancialPayload = {
@@ -13,13 +14,13 @@ export type MonthlyFinancialPayload = {
 
 export type BulkPlanPayload = {
   generateFromContractDates?: boolean;
+  generateFromAcceptanceSchedule?: boolean;
+  replaceExisting?: boolean;
   firstPeriodZero?: boolean;
   equalSplit?: boolean;
-  items?: Array<{
-    period: string;
-    plannedAmount: number;
-    note?: string;
-  }>;
+  startPeriod?: string;
+  endPeriod?: string;
+  items?: RevenuePlanPayload[];
 };
 
 export type DraftEqualSplitPayload = {
@@ -38,11 +39,16 @@ export const financialControlApi = {
     contractId: string,
     payload: {
       useContractDates?: boolean;
+      useAcceptanceSchedule?: boolean;
       startPeriod?: string;
       endPeriod?: string;
     } = { useContractDates: true },
   ) {
-    return apiFetch<{ periods: string[] }>(
+    return apiFetch<{
+      periods: string[];
+      acceptanceRounds?: number | null;
+      contractValue?: string;
+    }>(
       `/contracts/${contractId}/financial-control/generate-periods`,
       {
         method: 'POST',
@@ -53,7 +59,14 @@ export const financialControlApi = {
 
   draftEqualSplit(contractId: string, payload: DraftEqualSplitPayload) {
     return apiFetch<{
-      items: Array<{ period: string; plannedAmount: string; note: string | null }>;
+      items: Array<{
+        period: string;
+        plannedAmount: string;
+        note: string | null;
+        batchSequence?: number | null;
+        periodStartDate?: string | null;
+        periodEndDate?: string | null;
+      }>;
       total: string;
       contractValue: string;
     }>(`/contracts/${contractId}/financial-control/draft-equal-split`, {

@@ -1,15 +1,33 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { useAuth, WriteOnly } from '@/components/auth/auth-provider';
+import { hasFeature, isLimitedUser } from '@/lib/features';
 import { Plus, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   ApiError,
+  companiesApi,
   contractsApi,
+  customersApi,
   projectsApi,
   type ContractBulkPayload,
 } from '@/lib/api';
+import {
+  ContractExpiryBadge,
+  ContractExpiryHighlight,
+  contractExpiryRowClass,
+} from '@/components/contracts/contract-expiry-highlight';
+import { ContractFormDialog } from '@/components/contracts/contract-form-dialog';
+import {
+  contractKindLabel,
+  contractListHref,
+  isExpenseContractKind,
+  parseContractKind,
+  partnerTypeLabel,
+} from '@/lib/contract-kind';
 import { formatCurrencyVND, formatDate } from '@/lib/format';
 import {
   isValidAmount,
@@ -18,9 +36,12 @@ import {
 } from '@/lib/csv';
 import type {
   BillingCycle,
+  Company,
   Contract,
+  ContractKind,
   ContractStatus,
   ContractType,
+  Customer,
   Project,
 } from '@/lib/types';
 import {
@@ -48,8 +69,26 @@ import {
 } from '@/components/shared/status-badges';
 import { ConfirmDeleteButton } from '@/components/shared/confirm-delete-button';
 import { CsvDataTransfer } from '@/components/shared/csv-data-transfer';
-import { PaginationBar } from '@/components/shared/pagination-bar';
+import { InfiniteScrollFooter } from '@/components/shared/infinite-scroll-footer';
 import { QueryState } from '@/components/shared/query-state';
+import {
+  TableBulkActionBar,
+  TableCellCheckbox,
+  TableHeadCheckbox,
+} from '@/components/shared/table-selection';
+import { ColumnVisibilityMenu } from '@/components/shared/column-visibility-menu';
+import { useInfinitePaginatedList } from '@/hooks/use-infinite-paginated-list';
+import { useTableSelection } from '@/hooks/use-table-selection';
+import {
+  useColumnVisibility,
+  type ColumnDef,
+} from '@/hooks/use-column-visibility';
+import {
+  formatContractTypesDisplay,
+  normalizeContractTypesInput,
+  validateContractTypesField,
+} from '@/lib/contract-type';
+import { fetchAllPaginated } from '@/lib/fetch-all-paginated';
 import { Breadcrumbs } from '@/components/layout/breadcrumbs';
 import { CollapsibleFilters } from '@/components/shared/collapsible-filters';
 import {
@@ -62,14 +101,53 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 
-const PAGE_SIZE = 10;
+type ContractCol =
+  | 'contractNo'
+  | 'name'
+  | 'project'
+  | 'company'
+  | 'counterparty'
+  | 'contractValue'
+  | 'contractType'
+  | 'signedDate'
+  | 'startDate'
+  | 'endDate'
+  | 'durationYears'
+  | 'expiry'
+  | 'billingCycle'
+  | 'status'
+  | 'actions';
+
+const CONTRACT_COLUMNS: ColumnDef<ContractCol>[] = [
+  { key: 'contractNo', label: 'Số hợp đồng', locked: true },
+  { key: 'name', label: 'Tên hợp đồng', locked: true },
+  { key: 'project', label: 'Dự án' },
+  { key: 'company', label: 'Công ty' },
+  { key: 'counterparty', label: 'Đối tác' },
+  { key: 'contractValue', label: 'Giá trị hợp đồng' },
+  { key: 'contractType', label: 'Loại hợp đồng' },
+  { key: 'signedDate', label: 'Ngày ký' },
+  { key: 'startDate', label: 'Ngày bắt đầu' },
+  { key: 'endDate', label: 'Ngày kết thúc' },
+  { key: 'durationYears', label: 'Thời hạn (năm)' },
+  { key: 'expiry', label: 'Thời hạn (theo ngày KT)' },
+  { key: 'billingCycle', label: 'Chu kỳ nghiệm thu' },
+  { key: 'status', label: 'Trạng thái HĐ' },
+  { key: 'actions', label: 'Thao tác', locked: true },
+];
 
 type PendingDeletedContractImport = {
   items: ContractBulkPayload[];
   contractNos: string[];
 };
 
-function buildContractCsvColumns(projects: Project[]) {
+function buildContractCsvColumns(
+  projects: Project[],
+  kind: ContractKind,
+  companies: Company[],
+  partners: Customer[],
+) {
+  const expense = isExpenseContractKind(kind);
   return [
     {
       key: 'projectCode',
@@ -83,6 +161,39 @@ function buildContractCsvColumns(projects: Project[]) {
         label: `${p.code} — ${p.name}`,
       })),
     },
+    {
+      key: 'companyCode',
+      header: 'MaCongTy',
+      aliases: ['companyCode', 'Mã công ty', 'cong ty'],
+      required: expense,
+      sample: companies[0]?.code ?? 'SICOM',
+      type: 'select' as const,
+      options: companies.map((c) => ({
+        value: c.code,
+        label: `${c.code} — ${c.name}`,
+      })),
+    },
+    ...(expense
+      ? [
+          {
+            key: 'counterpartyCode',
+            header: 'MaDoiTac',
+            aliases: [
+              'counterpartyCode',
+              'Mã đối tác',
+              'Mã thầu phụ',
+              'Mã NCC',
+            ],
+            required: true,
+            sample: partners[0]?.code ?? 'TP001',
+            type: 'select' as const,
+            options: partners.map((p) => ({
+              value: p.code,
+              label: `${p.code} — ${p.name}`,
+            })),
+          },
+        ]
+      : []),
     {
       key: 'contractNo',
       header: 'SoHD',
@@ -102,8 +213,9 @@ function buildContractCsvColumns(projects: Project[]) {
       header: 'LoaiHD',
       aliases: ['contractType', 'Loại HĐ'],
       required: true,
-      sample: 'MAINTENANCE',
-      type: 'select' as const,
+      sample: 'OPERATION;MAINTENANCE',
+      type: 'multi-select' as const,
+      multiSeparator: ';',
       options: CONTRACT_TYPES.map((t) => ({
         value: t,
         label: contractTypeLabel[t],
@@ -128,6 +240,17 @@ function buildContractCsvColumns(projects: Project[]) {
         value: c,
         label: billingCycleLabel[c],
       })),
+    },
+    {
+      key: 'durationYears',
+      header: 'ThoiHanNam',
+      aliases: [
+        'durationYears',
+        'Thoi han nam',
+        'Thời hạn năm',
+        'ThoiHan',
+      ],
+      sample: '1',
     },
     {
       key: 'status',
@@ -176,6 +299,29 @@ function buildContractCsvColumns(projects: Project[]) {
   ];
 }
 
+function contractToExportRow(item: Contract): Record<string, string> {
+  return {
+    projectCode: item.project?.code ?? '',
+    companyCode: item.company?.code ?? '',
+    counterpartyCode: item.counterparty?.code ?? '',
+    contractNo: item.contractNo,
+    name: item.name,
+    contractType: item.contractType,
+    contractValue: String(item.contractValue),
+    billingCycle: item.billingCycle,
+    durationYears:
+      item.durationYears != null && item.durationYears > 0
+        ? String(item.durationYears)
+        : '',
+    status: item.status,
+    paymentTermDays: String(item.paymentTermDays ?? 60),
+    startDate: item.startDate?.slice(0, 10) ?? '',
+    endDate: item.endDate?.slice(0, 10) ?? '',
+    signedDate: item.signedDate?.slice(0, 10) ?? '',
+    note: item.note ?? '',
+  };
+}
+
 function toIsoDate(value?: string) {
   const v = value?.trim();
   if (!v) return undefined;
@@ -194,76 +340,214 @@ function normalizeEnum<T extends string>(
   return (allowed as readonly string[]).includes(raw) ? (raw as T) : null;
 }
 
+/** Số / tên HĐ: link sang chi tiết, hoặc chữ thường khi tài khoản không được xem chi tiết */
+function ContractCellLink({
+  contractId,
+  enabled,
+  children,
+}: {
+  contractId: string;
+  enabled: boolean;
+  children: React.ReactNode;
+}) {
+  if (!enabled) return <span>{children}</span>;
+  return (
+    <Link
+      href={`/contracts/${contractId}`}
+      className="underline-offset-2 hover:text-slate-950 hover:underline"
+    >
+      {children}
+    </Link>
+  );
+}
+
 export default function ContractsPage() {
-  const [data, setData] = useState<Contract[]>([]);
+  return (
+    <Suspense fallback={<div className="p-8 text-slate-500">Đang tải...</div>}>
+      <ContractsPageContent />
+    </Suspense>
+  );
+}
+
+function ContractsPageContent() {
+  const searchParams = useSearchParams();
+  const kind = parseContractKind(searchParams.get('kind'));
+  // key: đổi tab → reset bộ lọc / lựa chọn
+  return <ContractsTab key={kind} kind={kind} />;
+}
+
+function ContractsTab({ kind }: { kind: ContractKind }) {
+  const expense = isExpenseContractKind(kind);
+  const kindLabel = contractKindLabel[kind];
+  const { user } = useAuth();
+  // Tài khoản giới hạn: chỉ xem danh sách — không mở chi tiết / sửa / xóa / import
+  const fullAccess = !isLimitedUser(user);
+  const canCreate = hasFeature(user, 'contracts.create');
   const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [partners, setPartners] = useState<Customer[]>([]);
   const [search, setSearch] = useState('');
   const [projectId, setProjectId] = useState('');
+  const [companyId, setCompanyId] = useState('');
+  const [counterpartyId, setCounterpartyId] = useState('');
   const [status, setStatus] = useState<ContractStatus | ''>('');
   const [contractType, setContractType] = useState<ContractType | ''>('');
   const [billingCycle, setBillingCycle] = useState<BillingCycle | ''>('');
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  // Popup thêm / sửa HĐ: null = thêm mới
+  const [formOpen, setFormOpen] = useState(false);
+  const [formContract, setFormContract] = useState<Contract | null>(null);
+  const openForm = (contract: Contract | null) => {
+    setFormContract(contract);
+    setFormOpen(true);
+  };
   const [pendingDeletedContractImport, setPendingDeletedContractImport] =
     useState<PendingDeletedContractImport | null>(null);
 
   const contractCsvColumns = useMemo(
-    () => buildContractCsvColumns(projects),
-    [projects],
+    () => buildContractCsvColumns(projects, kind, companies, partners),
+    [projects, kind, companies, partners],
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await contractsApi.list({
-        search,
-        projectId: projectId || undefined,
-        status: status || undefined,
-        contractType: contractType || undefined,
-        billingCycle: billingCycle || undefined,
-        page,
-        limit: PAGE_SIZE,
-        sortBy: 'contractNo',
-        sortOrder: 'asc',
-      });
-      setData(res.data);
-      setTotal(res.meta.total);
-      setTotalPages(res.meta.totalPages);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'Không tải được hợp đồng';
-      setError(message);
-      toast.error(message);
-    } finally {
-      setLoading(false);
-    }
-  }, [search, projectId, status, contractType, billingCycle, page]);
+  const listFilters = useMemo(
+    () => ({
+      kind,
+      search,
+      projectId: projectId || undefined,
+      companyId: companyId || undefined,
+      counterpartyId: counterpartyId || undefined,
+      status: status || undefined,
+      contractType: contractType || undefined,
+      billingCycle: billingCycle || undefined,
+      sortBy: 'contractNo',
+      sortOrder: 'asc' as const,
+    }),
+    [
+      kind,
+      search,
+      projectId,
+      companyId,
+      counterpartyId,
+      status,
+      contractType,
+      billingCycle,
+    ],
+  );
+
+  const fetchPage = useCallback(
+    (page: number, limit: number) =>
+      contractsApi.list({ ...listFilters, page, limit }),
+    [listFilters],
+  );
+
+  const {
+    data,
+    loading,
+    loadingMore,
+    error,
+    total,
+    hasMore,
+    loadMore,
+    reload,
+  } = useInfinitePaginatedList<Contract>({
+    fetchPage,
+    resetDeps: [listFilters],
+  });
+
+  const {
+    selectedIds,
+    selectedCount,
+    allSelected,
+    someSelected,
+    toggleAll,
+    toggleOne,
+    clearSelection,
+  } = useTableSelection(data);
+
+  // HĐ CĐT không có cột đối tác (khách hàng lấy theo dự án)
+  const columns = useMemo(
+    () =>
+      expense
+        ? CONTRACT_COLUMNS
+        : CONTRACT_COLUMNS.filter((c) => c.key !== 'counterparty'),
+    [expense],
+  );
+  const { isVisible: isColumnVisible, toggle, showAll, reset } =
+    useColumnVisibility(
+      kind === 'INVESTOR' ? 'table-cols:contracts' : `table-cols:contracts-${kind}`,
+      columns,
+    );
+  const isVisible = (key: ContractCol) =>
+    (expense || key !== 'counterparty') &&
+    (fullAccess || key !== 'actions') &&
+    isColumnVisible(key);
 
   useEffect(() => {
     projectsApi
       .list({ limit: 100, sortBy: 'code', sortOrder: 'asc' })
       .then((res) => setProjects(res.data))
       .catch(() => undefined);
+    companiesApi
+      .list({ limit: 100 })
+      .then((res) => setCompanies(res.data))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      void load();
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [load]);
+    if (!expense) return;
+    fetchAllPaginated((page, limit) =>
+      customersApi.list({
+        page,
+        limit,
+        partnerType: kind,
+        sortBy: 'code',
+        sortOrder: 'asc',
+      }),
+    )
+      .then(setPartners)
+      .catch(() => undefined);
+  }, [expense, kind]);
+
+  // Khối hết hạn / hoàn thành: toàn bộ HĐ của tab (không theo bộ lọc);
+  // tải lại khi tổng số HĐ đổi (xóa / import)
+  const [highlightContracts, setHighlightContracts] = useState<Contract[]>([]);
+  // Tăng sau khi sửa HĐ trong popup (đổi trạng thái / ngày KT không đổi total)
+  const [highlightVersion, setHighlightVersion] = useState(0);
+  useEffect(() => {
+    fetchAllPaginated((page, limit) =>
+      contractsApi.list({ kind, page, limit, sortBy: 'endDate', sortOrder: 'asc' }),
+    )
+      .then(setHighlightContracts)
+      .catch(() => undefined);
+  }, [kind, total, highlightVersion]);
+
+  useEffect(() => {
+    if (error) toast.error(error);
+  }, [error]);
 
   const handleDelete = async (id: string) => {
     try {
       await contractsApi.remove(id);
       toast.success('Đã xóa hợp đồng');
-      load();
+      reload();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Xóa thất bại');
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    setBulkDeleting(true);
+    try {
+      await Promise.all(ids.map((id) => contractsApi.remove(id)));
+      toast.success(`Đã xóa ${ids.length} hợp đồng`);
+      clearSelection();
+      reload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Xóa thất bại');
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -276,16 +560,22 @@ export default function ContractsPage() {
     }
 
     const items: ContractBulkPayload[] = rows.map((row) => {
-        const contractType = normalizeEnum(row.contractType, CONTRACT_TYPES)!;
+        const contractType = normalizeContractTypesInput(row.contractType)!;
         const billingCycle = normalizeEnum(row.billingCycle, BILLING_CYCLES)!;
         const status =
           normalizeEnum(row.status || 'ACTIVE', CONTRACT_STATUSES) ?? 'ACTIVE';
         const paymentTermDays = row.paymentTermDays?.trim()
           ? Number(row.paymentTermDays)
           : undefined;
-
+        const durationYears = row.durationYears?.trim()
+          ? Number(row.durationYears)
+          : undefined;
         return {
           projectCode: row.projectCode.trim(),
+          companyCode: row.companyCode?.trim() || undefined,
+          counterpartyCode: expense
+            ? row.counterpartyCode?.trim() || undefined
+            : undefined,
           contractNo: row.contractNo.trim(),
           name: row.name.trim(),
           contractType,
@@ -293,6 +583,10 @@ export default function ContractsPage() {
           billingCycle,
           status,
           paymentTermDays,
+          durationYears:
+            durationYears != null && durationYears > 0
+              ? durationYears
+              : undefined,
           startDate: toIsoDate(row.startDate),
           endDate: toIsoDate(row.endDate),
           signedDate: toIsoDate(row.signedDate),
@@ -301,8 +595,8 @@ export default function ContractsPage() {
       });
 
     try {
-      await contractsApi.bulkUpsert(items);
-      await load();
+      await contractsApi.bulkUpsert(items, undefined, kind);
+      await reload();
     } catch (err) {
       const details = err instanceof ApiError ? err.details : undefined;
       const conflict = details as
@@ -323,6 +617,13 @@ export default function ContractsPage() {
     }
   };
 
+  const exportAllContracts = useCallback(async () => {
+    const items = await fetchAllPaginated((page, limit) =>
+      contractsApi.list({ ...listFilters, page, limit }),
+    );
+    return items.map(contractToExportRow);
+  }, [listFilters]);
+
   const resolveDeletedContractImport = async (
     action: 'RESTORE' | 'REPLACE',
   ) => {
@@ -331,6 +632,7 @@ export default function ContractsPage() {
       const result = await contractsApi.bulkUpsert(
         pendingDeletedContractImport.items,
         action,
+        kind,
       );
       toast.success(
         action === 'RESTORE'
@@ -338,7 +640,7 @@ export default function ContractsPage() {
           : `Đã tạo mới ${result.created} hợp đồng và xóa hẳn bản cũ.`,
       );
       setPendingDeletedContractImport(null);
-      await load();
+      await reload();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Nhập file thất bại');
     }
@@ -378,26 +680,43 @@ export default function ContractsPage() {
         items={[
           { label: 'Quản lý dự án' },
           { label: 'Hợp đồng', href: '/contracts' },
+          { label: kindLabel, href: contractListHref(kind) },
         ]}
       />
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="font-serif text-2xl font-semibold">Hợp đồng</h2>
+          <h2 className="font-serif text-2xl font-semibold">{kindLabel}</h2>
           <p className="text-sm text-slate-500">
-            Quản lý hợp đồng theo dự án, loại và chu kỳ nghiệm thu
+            {expense
+              ? `HĐ chi tiền cho ${partnerTypeLabel[kind].toLowerCase()} — theo công ty và dự án`
+              : 'HĐ thu tiền với chủ đầu tư — theo dự án, loại và chu kỳ nghiệm thu'}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <ColumnVisibilityMenu
+            columns={columns}
+            isVisible={isVisible}
+            toggle={toggle}
+            showAll={showAll}
+            reset={reset}
+          />
           <CsvDataTransfer
-            title="hợp đồng"
-            filenamePrefix="hop-dong"
+            hideImport={!fullAccess}
+            title={kindLabel}
+            filenamePrefix={
+              kind === 'INVESTOR' ? 'hop-dong' : `hop-dong-${kind.toLowerCase()}`
+            }
             columns={contractCsvColumns}
             sampleRows={[
               {
                 projectCode: '175',
+                companyCode: companies[0]?.code ?? 'SICOM',
+                ...(expense
+                  ? { counterpartyCode: partners[0]?.code ?? 'TP001' }
+                  : {}),
                 contractNo: '175/2026/HDDV-MAU',
                 name: 'Hop dong dich vu mau',
-                contractType: 'MAINTENANCE',
+                contractType: 'OPERATION;MAINTENANCE',
                 contractValue: '7500000000',
                 billingCycle: 'MONTHLY',
                 status: 'ACTIVE',
@@ -408,20 +727,7 @@ export default function ContractsPage() {
                 note: 'File mau import',
               },
             ]}
-            exportRows={data.map((item) => ({
-              projectCode: item.project?.code ?? '',
-              contractNo: item.contractNo,
-              name: item.name,
-              contractType: item.contractType,
-              contractValue: String(item.contractValue),
-              billingCycle: item.billingCycle,
-              status: item.status,
-              paymentTermDays: String(item.paymentTermDays ?? 60),
-              startDate: item.startDate?.slice(0, 10) ?? '',
-              endDate: item.endDate?.slice(0, 10) ?? '',
-              signedDate: item.signedDate?.slice(0, 10) ?? '',
-              note: item.note ?? '',
-            }))}
+            onExport={exportAllContracts}
             validateRow={(row) => {
               const errors: string[] = [];
               if (!row.projectCode?.trim()) errors.push('Thiếu mã dự án');
@@ -433,11 +739,29 @@ export default function ContractsPage() {
               ) {
                 errors.push(`Mã dự án "${row.projectCode}" không tồn tại`);
               }
+              const companyCode = row.companyCode?.trim().toLowerCase();
+              if (!companyCode) {
+                if (expense) errors.push('Thiếu mã công ty');
+              } else if (
+                !companies.some((c) => c.code.toLowerCase() === companyCode)
+              ) {
+                errors.push(`Mã công ty "${row.companyCode}" không tồn tại`);
+              }
+              if (expense) {
+                const partnerCode = row.counterpartyCode?.trim().toLowerCase();
+                if (!partnerCode) {
+                  errors.push(`Thiếu mã ${partnerTypeLabel[kind].toLowerCase()}`);
+                } else if (
+                  !partners.some((p) => p.code.toLowerCase() === partnerCode)
+                ) {
+                  errors.push(
+                    `Mã "${row.counterpartyCode}" không có trong ${partnerTypeLabel[kind]}`,
+                  );
+                }
+              }
               if (!row.contractNo?.trim()) errors.push('Thiếu số HĐ');
               if (!row.name?.trim()) errors.push('Thiếu tên HĐ');
-              if (!normalizeEnum(row.contractType ?? '', CONTRACT_TYPES)) {
-                errors.push(`Loại HĐ: ${CONTRACT_TYPES.join(' | ')}`);
-              }
+              errors.push(...validateContractTypesField(row.contractType ?? ''));
               if (!isValidAmount(row.contractValue ?? '')) {
                 errors.push('Giá trị không hợp lệ');
               }
@@ -469,14 +793,30 @@ export default function ContractsPage() {
             }}
             onImport={handleImportCsv}
           />
-          <Button asChild>
-            <Link href="/contracts/new">
+          {canCreate ? (
+            <Button onClick={() => openForm(null)}>
               <Plus className="h-4 w-4" />
-              Thêm hợp đồng
-            </Link>
-          </Button>
+              Thêm {kindLabel}
+            </Button>
+          ) : null}
         </div>
       </div>
+
+      <ContractExpiryHighlight
+        contracts={highlightContracts}
+        linkable={fullAccess}
+      />
+
+      <ContractFormDialog
+        open={formOpen}
+        onOpenChange={setFormOpen}
+        contract={formContract}
+        defaultKind={kind}
+        onSaved={() => {
+          void reload();
+          setHighlightVersion((v) => v + 1);
+        }}
+      />
 
       <CollapsibleFilters>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
@@ -484,20 +824,18 @@ export default function ContractsPage() {
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <Input
               className="pl-9"
-              placeholder="Tìm số HĐ, tên hợp đồng..."
+              placeholder={
+                expense
+                  ? 'Tìm số HĐ, tên HĐ, tên đối tác...'
+                  : 'Tìm số HĐ, tên hợp đồng...'
+              }
               value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
+              onChange={(e) => setSearch(e.target.value)}
             />
           </div>
           <Select
             value={projectId}
-            onChange={(e) => {
-              setProjectId(e.target.value);
-              setPage(1);
-            }}
+            onChange={(e) => setProjectId(e.target.value)}
           >
             <option value="">Tất cả dự án</option>
             {projects.map((p) => (
@@ -507,11 +845,34 @@ export default function ContractsPage() {
             ))}
           </Select>
           <Select
+            value={companyId}
+            onChange={(e) => setCompanyId(e.target.value)}
+          >
+            <option value="">Tất cả công ty</option>
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.code} — {c.name}
+              </option>
+            ))}
+          </Select>
+          {expense ? (
+            <Select
+              value={counterpartyId}
+              onChange={(e) => setCounterpartyId(e.target.value)}
+            >
+              <option value="">
+                Tất cả {partnerTypeLabel[kind].toLowerCase()}
+              </option>
+              {partners.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.code} — {p.name}
+                </option>
+              ))}
+            </Select>
+          ) : null}
+          <Select
             value={status}
-            onChange={(e) => {
-              setStatus(e.target.value as ContractStatus | '');
-              setPage(1);
-            }}
+            onChange={(e) => setStatus(e.target.value as ContractStatus | '')}
           >
             <option value="">Tất cả trạng thái</option>
             {CONTRACT_STATUSES.map((s) => (
@@ -522,10 +883,9 @@ export default function ContractsPage() {
           </Select>
           <Select
             value={contractType}
-            onChange={(e) => {
-              setContractType(e.target.value as ContractType | '');
-              setPage(1);
-            }}
+            onChange={(e) =>
+              setContractType(e.target.value as ContractType | '')
+            }
           >
             <option value="">Tất cả loại HĐ</option>
             {CONTRACT_TYPES.map((t) => (
@@ -536,10 +896,9 @@ export default function ContractsPage() {
           </Select>
           <Select
             value={billingCycle}
-            onChange={(e) => {
-              setBillingCycle(e.target.value as BillingCycle | '');
-              setPage(1);
-            }}
+            onChange={(e) =>
+              setBillingCycle(e.target.value as BillingCycle | '')
+            }
             className="md:col-span-2 xl:col-span-1"
           >
             <option value="">Tất cả chu kỳ</option>
@@ -558,101 +917,206 @@ export default function ContractsPage() {
             loading={loading}
             error={error}
             empty={data.length === 0}
-            emptyMessage="Chưa có hợp đồng nào."
+            emptyMessage={`Chưa có ${kindLabel} nào.`}
             emptyAction={
-              <Button asChild variant="outline">
-                <Link href="/contracts/new">Tạo hợp đồng đầu tiên</Link>
-              </Button>
+              canCreate ? (
+                <Button variant="outline" onClick={() => openForm(null)}>
+                  Tạo {kindLabel} đầu tiên
+                </Button>
+              ) : undefined
             }
-            onRetry={load}
+            onRetry={reload}
           >
+            {fullAccess ? (
+              <TableBulkActionBar
+                selectedCount={selectedCount}
+                entityLabel="hợp đồng"
+                onClear={clearSelection}
+                onConfirmDelete={handleBulkDelete}
+                deleting={bulkDeleting}
+              />
+            ) : null}
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Số hợp đồng</TableHead>
-                    <TableHead>Tên hợp đồng</TableHead>
-                    <TableHead>Dự án</TableHead>
-                    <TableHead>Giá trị hợp đồng</TableHead>
-                    <TableHead>Loại hợp đồng</TableHead>
-                    <TableHead>Ngày ký</TableHead>
-                    <TableHead>Ngày bắt đầu</TableHead>
-                    <TableHead>Ngày kết thúc</TableHead>
-                    <TableHead>Chu kỳ nghiệm thu</TableHead>
-                    <TableHead>Trạng thái</TableHead>
-                    <TableHead className="text-right">Thao tác</TableHead>
+                    {fullAccess ? (
+                      <TableHeadCheckbox
+                        checked={allSelected}
+                        indeterminate={someSelected}
+                        onChange={toggleAll}
+                        disabled={data.length === 0}
+                      />
+                    ) : null}
+                    {isVisible('contractNo') && (
+                      <TableHead>Số hợp đồng</TableHead>
+                    )}
+                    {isVisible('name') && <TableHead>Tên hợp đồng</TableHead>}
+                    {isVisible('project') && <TableHead>Dự án</TableHead>}
+                    {isVisible('company') && <TableHead>Công ty</TableHead>}
+                    {isVisible('counterparty') && (
+                      <TableHead>{partnerTypeLabel[kind]}</TableHead>
+                    )}
+                    {isVisible('contractValue') && (
+                      <TableHead>Giá trị hợp đồng</TableHead>
+                    )}
+                    {isVisible('contractType') && (
+                      <TableHead>Loại hợp đồng</TableHead>
+                    )}
+                    {isVisible('signedDate') && <TableHead>Ngày ký</TableHead>}
+                    {isVisible('startDate') && (
+                      <TableHead>Ngày bắt đầu</TableHead>
+                    )}
+                    {isVisible('endDate') && (
+                      <TableHead>Ngày kết thúc</TableHead>
+                    )}
+                    {isVisible('durationYears') && (
+                      <TableHead>Thời hạn (năm)</TableHead>
+                    )}
+                    {isVisible('expiry') && <TableHead>Thời hạn</TableHead>}
+                    {isVisible('billingCycle') && (
+                      <TableHead>Chu kỳ nghiệm thu</TableHead>
+                    )}
+                    {isVisible('status') && (
+                      <TableHead>Trạng thái HĐ</TableHead>
+                    )}
+                    {isVisible('actions') && (
+                      <TableHead className="text-right">Thao tác</TableHead>
+                    )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {data.map((contract) => (
-                    <TableRow key={contract.id}>
-                      <TableCell className="font-medium">
-                        <Link
-                          href={`/contracts/${contract.id}`}
-                          className="underline-offset-2 hover:text-slate-950 hover:underline"
-                        >
-                          {contract.contractNo}
-                        </Link>
-                      </TableCell>
-                      <TableCell>
-                        <Link
-                          href={`/contracts/${contract.id}`}
-                          className="underline-offset-2 hover:text-slate-950 hover:underline"
-                        >
-                          {contract.name}
-                        </Link>
-                      </TableCell>
-                      <TableCell>
-                        {contract.project?.code ?? '—'}
-                      </TableCell>
-                      <TableCell>
-                        {formatCurrencyVND(contract.contractValue)}
-                      </TableCell>
-                      <TableCell>
-                        {contractTypeLabel[contract.contractType]}
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums text-slate-600">
-                        {formatDate(contract.signedDate)}
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums text-slate-600">
-                        {formatDate(contract.startDate)}
-                      </TableCell>
-                      <TableCell className="text-xs tabular-nums text-slate-600">
-                        {formatDate(contract.endDate)}
-                      </TableCell>
-                      <TableCell>
-                        {billingCycleLabel[contract.billingCycle]}
-                      </TableCell>
-                      <TableCell>
-                        <ContractStatusBadge status={contract.status} />
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex justify-end gap-2">
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={`/contracts/${contract.id}`}>Xem</Link>
-                          </Button>
-                          <Button asChild size="sm" variant="secondary">
-                            <Link href={`/contracts/${contract.id}/edit`}>
-                              Sửa
-                            </Link>
-                          </Button>
-                          <ConfirmDeleteButton
-                            onConfirm={() => handleDelete(contract.id)}
-                            title="Xóa hợp đồng?"
-                            description={`Xóa mềm hợp đồng ${contract.contractNo}.`}
+                    <TableRow
+                      key={contract.id}
+                      className={contractExpiryRowClass(
+                        contract.endDate,
+                        contract.status,
+                      )}
+                    >
+                      {fullAccess ? (
+                        <TableCellCheckbox
+                          checked={selectedIds.has(contract.id)}
+                          onChange={(checked) =>
+                            toggleOne(contract.id, checked)
+                          }
+                        />
+                      ) : null}
+                      {isVisible('contractNo') && (
+                        <TableCell className="font-medium">
+                          <ContractCellLink contractId={contract.id} enabled={fullAccess}>
+                            {contract.contractNo}
+                          </ContractCellLink>
+                        </TableCell>
+                      )}
+                      {isVisible('name') && (
+                        <TableCell>
+                          <ContractCellLink contractId={contract.id} enabled={fullAccess}>
+                            {contract.name}
+                          </ContractCellLink>
+                        </TableCell>
+                      )}
+                      {isVisible('project') && (
+                        <TableCell>
+                          {contract.project?.code ?? '—'}
+                        </TableCell>
+                      )}
+                      {isVisible('company') && (
+                        <TableCell>{contract.company?.code ?? '—'}</TableCell>
+                      )}
+                      {isVisible('counterparty') && (
+                        <TableCell>
+                          {contract.counterparty
+                            ? `${contract.counterparty.code} — ${contract.counterparty.name}`
+                            : '—'}
+                        </TableCell>
+                      )}
+                      {isVisible('contractValue') && (
+                        <TableCell>
+                          {formatCurrencyVND(contract.contractValue)}
+                        </TableCell>
+                      )}
+                      {isVisible('contractType') && (
+                        <TableCell>
+                          {formatContractTypesDisplay(contract.contractType)}
+                        </TableCell>
+                      )}
+                      {isVisible('signedDate') && (
+                        <TableCell className="text-xs tabular-nums text-slate-600">
+                          {formatDate(contract.signedDate)}
+                        </TableCell>
+                      )}
+                      {isVisible('startDate') && (
+                        <TableCell className="text-xs tabular-nums text-slate-600">
+                          {formatDate(contract.startDate)}
+                        </TableCell>
+                      )}
+                      {isVisible('endDate') && (
+                        <TableCell className="text-xs tabular-nums text-slate-600">
+                          {formatDate(contract.endDate)}
+                        </TableCell>
+                      )}
+                      {isVisible('durationYears') && (
+                        <TableCell className="tabular-nums text-slate-700">
+                          {contract.durationYears != null &&
+                          contract.durationYears > 0
+                            ? contract.durationYears
+                            : '—'}
+                        </TableCell>
+                      )}
+                      {isVisible('expiry') && (
+                        <TableCell>
+                          <ContractExpiryBadge
+                            endDate={contract.endDate}
+                            status={contract.status}
                           />
-                        </div>
-                      </TableCell>
+                        </TableCell>
+                      )}
+                      {isVisible('billingCycle') && (
+                        <TableCell>
+                          {billingCycleLabel[contract.billingCycle]}
+                        </TableCell>
+                      )}
+                      {isVisible('status') && (
+                        <TableCell>
+                          <ContractStatusBadge status={contract.status} />
+                        </TableCell>
+                      )}
+                      {isVisible('actions') && (
+                        <TableCell>
+                          <div className="flex justify-end gap-2">
+                            <Button asChild size="sm" variant="outline">
+                              <Link href={`/contracts/${contract.id}`}>
+                                Xem
+                              </Link>
+                            </Button>
+                            <WriteOnly>
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                onClick={() => openForm(contract)}
+                              >
+                                Sửa
+                              </Button>
+                            </WriteOnly>
+                            <ConfirmDeleteButton
+                              onConfirm={() => handleDelete(contract.id)}
+                              title="Xóa hợp đồng?"
+                              description={`Xóa mềm hợp đồng ${contract.contractNo}.`}
+                            />
+                          </div>
+                        </TableCell>
+                      )}
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </div>
-            <PaginationBar
-              page={page}
-              totalPages={totalPages}
+            <InfiniteScrollFooter
+              hasMore={hasMore}
+              loadingMore={loadingMore}
               total={total}
-              onPageChange={setPage}
+              onLoadMore={loadMore}
             />
           </QueryState>
         </CardContent>

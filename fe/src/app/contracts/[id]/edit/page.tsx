@@ -8,6 +8,7 @@ import type { Contract } from '@/lib/types';
 import { ContractForm } from '@/components/contracts/contract-form';
 import { QueryState } from '@/components/shared/query-state';
 import { Breadcrumbs } from '@/components/layout/breadcrumbs';
+import { contractKindLabel, contractListHref } from '@/lib/contract-kind';
 
 export default function EditContractPage() {
   const params = useParams<{ id: string }>();
@@ -43,7 +44,10 @@ export default function EditContractPage() {
       <Breadcrumbs
         items={[
           { label: 'Quản lý dự án' },
-          { label: 'Hợp đồng', href: '/contracts' },
+          {
+            label: contractKindLabel[contract?.kind ?? 'INVESTOR'],
+            href: contractListHref(contract?.kind ?? 'INVESTOR'),
+          },
           ...(contract
             ? [
                 {

@@ -11,6 +11,11 @@ import { toDateInputValue } from '@/lib/format';
 import type { Customer, Project } from '@/lib/types';
 import { DEFAULT_COMPANY_ID, PROJECT_STATUSES } from '@/lib/types';
 import { projectStatusLabel } from '@/components/shared/status-badges';
+import { fetchAllPaginated } from '@/lib/fetch-all-paginated';
+import {
+  normalizeProjectManagerImportValue,
+  projectManagerExportValue,
+} from '@/lib/project-manager';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -38,6 +43,7 @@ const schema = z
     ]),
     description: z.string().optional(),
     note: z.string().optional(),
+    projectManagerName: z.string().optional(),
   })
   .refine(
     (data) =>
@@ -77,13 +83,24 @@ export function ProjectForm({
       status: initial?.status ?? 'PLANNING',
       description: initial?.description ?? '',
       note: initial?.note ?? '',
+      projectManagerName: initial
+        ? projectManagerExportValue(initial)
+        : '',
     },
   });
 
   useEffect(() => {
-    customersApi
-      .list({ limit: 100, status: 'ACTIVE' })
-      .then((res) => setCustomers(res.data))
+    fetchAllPaginated((page, limit) =>
+      customersApi.list({
+        page,
+        limit,
+        status: 'ACTIVE',
+        partnerType: 'INVESTOR',
+        sortBy: 'code',
+        sortOrder: 'asc',
+      }),
+    )
+      .then(setCustomers)
       .catch(() => toast.error('Không tải được khách hàng'));
   }, []);
 
@@ -99,6 +116,7 @@ export function ProjectForm({
       status: values.status,
       description: values.description || undefined,
       note: values.note || undefined,
+      projectManagerName: values.projectManagerName?.trim() ?? '',
       startDate: values.startDate
         ? new Date(values.startDate).toISOString()
         : undefined,
@@ -147,18 +165,10 @@ export function ProjectForm({
               <p className="text-xs text-red-600">{errors.name.message}</p>
             )}
           </div>
+          {/* companyId dự án giữ giá trị mặc định — công ty ký được chọn theo từng hợp đồng */}
+          <input type="hidden" {...register('companyId')} />
           <div className="space-y-2">
-            <Label>Công ty *</Label>
-            <Input {...register('companyId')} />
-            <p className="text-xs text-slate-500">
-              Backend chưa có API Company — nhập UUID công ty.
-            </p>
-            {errors.companyId && (
-              <p className="text-xs text-red-600">{errors.companyId.message}</p>
-            )}
-          </div>
-          <div className="space-y-2">
-            <Label>Khách hàng</Label>
+            <Label>Chủ đầu tư</Label>
             <Select {...register('customerId')}>
               <option value="">— Chọn —</option>
               {customers.map((c) => (
@@ -171,6 +181,13 @@ export function ProjectForm({
           <div className="space-y-2">
             <Label>Loại dự án</Label>
             <Input {...register('projectType')} />
+          </div>
+          <div className="space-y-2 md:col-span-2">
+            <Label>Trưởng dự án</Label>
+            <Input
+              {...register('projectManagerName')}
+              placeholder="Họ tên trưởng / quản lý dự án"
+            />
           </div>
           <div className="space-y-2">
             <Label>Trạng thái</Label>

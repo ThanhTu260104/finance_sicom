@@ -11,6 +11,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { AllowFeature } from '../../common/decorators/feature.decorator';
+import { FEATURES } from '../../common/constants/features';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CustomersService } from './customers.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
@@ -36,6 +38,8 @@ export class CustomersController {
   }
 
   @Get()
+  // Tài khoản giới hạn: form "Thêm hợp đồng" và bộ lọc "Danh sách hợp đồng" cần API này
+  @AllowFeature(FEATURES.CONTRACTS_CREATE, FEATURES.CONTRACTS_LIST)
   @ApiOperation({ summary: 'List customers' })
   findAll(@Query() query: QueryCustomerDto) {
     return this.customersService.findAll(query);

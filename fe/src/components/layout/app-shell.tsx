@@ -4,18 +4,44 @@ import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  BookOpen,
   Building2,
+  CalendarDays,
+  ChartColumn,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  FilePlus,
   FileText,
+  FolderCog,
   FolderKanban,
+  Handshake,
   LayoutDashboard,
   Menu,
+  Ellipsis,
+  Eye,
+  Tags,
   X,
+  Zap,
+  UserCog,
+  Upload,
+  Music2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { ContractSubNav } from '@/components/layout/contract-sub-nav';
+import { useAuth } from '@/components/auth/auth-provider';
+import { UserMenu } from '@/components/auth/user-menu';
+import { isSystemAdmin } from '@/lib/api';
+import { AppLogo } from '@/components/brand/app-logo';
+import {
+  GUIDE_PATH,
+  featureMatchesPath,
+  hasFeature,
+  isLimitedUser,
+  isReadOnlyUser,
+  userFeatures,
+} from '@/lib/features';
 
 type NavLink = {
   href: string;
@@ -26,21 +52,58 @@ type NavLink = {
 
 type NavSection = {
   title?: string;
+  /** Nhóm gập/mở (vd. "Khác") — tự mở khi đang ở một mục bên trong */
+  collapsible?: boolean;
+  icon?: typeof LayoutDashboard;
   items: NavLink[];
 };
 
 const SIDEBAR_STORAGE_KEY = 'finance-sidebar-collapsed';
 
-const navSections: NavSection[] = [
+function buildNavSections(
+  showAdminUsers: boolean,
+  readOnly: boolean,
+): NavSection[] {
+  const topItems: NavLink[] = [
+    {
+      href: '/',
+      label: 'Dashboard',
+      icon: LayoutDashboard,
+      match: (pathname) => pathname === '/',
+    },
+  ];
+  // Nhập nhanh chỉ để ghi dữ liệu → ẩn với tài khoản chỉ xem
+  if (!readOnly) {
+    topItems.push({
+      href: '/quick-entry',
+      label: 'Nhập nhanh',
+      icon: Zap,
+      match: (pathname) => pathname.startsWith('/quick-entry'),
+    });
+  }
+  topItems.push({
+    href: GUIDE_PATH,
+    label: 'Hướng dẫn',
+    icon: BookOpen,
+    match: (pathname) => pathname === GUIDE_PATH,
+  });
+  if (showAdminUsers) {
+    topItems.push({
+      href: '/admin/dashboard',
+      label: 'Dashboard Admin',
+      icon: LayoutDashboard,
+      match: (pathname) => pathname.startsWith('/admin/dashboard'),
+    });
+    topItems.push({
+      href: '/admin/users',
+      label: 'Tài khoản',
+      icon: UserCog,
+      match: (pathname) => pathname.startsWith('/admin/users'),
+    });
+  }
+  return [
   {
-    items: [
-      {
-        href: '/',
-        label: 'Dashboard',
-        icon: LayoutDashboard,
-        match: (pathname) => pathname === '/',
-      },
-    ],
+    items: topItems,
   },
   {
     title: 'QUẢN LÝ DỰ ÁN',
@@ -49,37 +112,196 @@ const navSections: NavSection[] = [
         href: '/projects',
         label: 'Dự án',
         icon: FolderKanban,
-        match: (pathname) => pathname.startsWith('/projects'),
-      },
-      {
-        href: '/customers',
-        label: 'Khách hàng',
-        icon: Building2,
-        match: (pathname) => pathname.startsWith('/customers'),
+        match: (pathname) =>
+          pathname.startsWith('/projects') &&
+          !pathname.startsWith('/projects/report-submissions'),
       },
       {
         href: '/contracts',
         label: 'Hợp đồng',
         icon: FileText,
-        match: (pathname) => pathname.startsWith('/contracts'),
+        match: (pathname) =>
+          pathname.startsWith('/contracts') &&
+          !pathname.startsWith('/contracts/statistics') &&
+          !pathname.startsWith('/contracts/maintenance'),
+      },
+    ],
+  },
+  {
+    title: 'Danh mục quản trị',
+    collapsible: true,
+    icon: FolderCog,
+    items: [
+      {
+        href: '/customers',
+        label: 'Đối tác',
+        icon: Handshake,
+        match: (pathname) => pathname.startsWith('/customers'),
+      },
+      {
+        href: '/companies',
+        label: 'Công ty',
+        icon: Building2,
+        match: (pathname) => pathname.startsWith('/companies'),
+      },
+      {
+        href: '/cost-categories',
+        label: 'Loại chi phí',
+        icon: Tags,
+        match: (pathname) => pathname.startsWith('/cost-categories'),
+      },
+    ],
+  },
+  {
+    title: 'Khác',
+    collapsible: true,
+    icon: Ellipsis,
+    items: [
+      {
+        href: '/contracts/statistics',
+        label: 'Thống kê hợp đồng',
+        icon: ChartColumn,
+        match: (pathname) => pathname.startsWith('/contracts/statistics'),
+      },
+      {
+        href: '/contracts/maintenance',
+        label: 'Bảo trì theo ngày',
+        icon: CalendarDays,
+        match: (pathname) => pathname.startsWith('/contracts/maintenance'),
+      },
+      {
+        href: '/projects/report-submissions',
+        label: 'Nộp báo cáo',
+        icon: Upload,
+        match: (pathname) =>
+          pathname.startsWith('/projects/report-submissions'),
+      },
+      {
+        href: '/music-voting',
+        label: 'Bình chọn ca khúc',
+        icon: Music2,
+        match: (pathname) => pathname.startsWith('/music-voting'),
       },
     ],
   },
 ];
+}
 
 function isActive(item: NavLink, pathname: string) {
   if (item.match) return item.match(pathname);
   return pathname === item.href || pathname.startsWith(`${item.href}/`);
 }
 
-function SidebarNav({
+function SidebarNavLink({
+  item,
+  pathname,
+  collapsed,
+  nested,
+  onNavigate,
+}: {
+  item: NavLink;
+  pathname: string;
+  collapsed?: boolean;
+  nested?: boolean;
+  onNavigate?: () => void;
+}) {
+  const active = isActive(item, pathname);
+  const Icon = item.icon;
+  return (
+    <Link
+      href={item.href}
+      onClick={onNavigate}
+      title={collapsed ? item.label : undefined}
+      className={cn(
+        'flex items-center rounded-md text-sm font-medium transition-colors',
+        collapsed
+          ? 'justify-center px-2 py-2.5'
+          : cn('gap-2.5 px-3 py-2', nested && 'pl-6'),
+        active ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100',
+      )}
+      aria-current={active ? 'page' : undefined}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      {!collapsed ? <span>{item.label}</span> : null}
+    </Link>
+  );
+}
+
+function CollapsibleNavSection({
+  section,
   pathname,
   collapsed,
   onNavigate,
 }: {
+  section: NavSection;
   pathname: string;
   collapsed?: boolean;
   onNavigate?: () => void;
+}) {
+  const hasActive = section.items.some((item) => isActive(item, pathname));
+  const [open, setOpen] = useState(hasActive);
+  const expanded = open || hasActive;
+  const Icon = section.icon ?? Ellipsis;
+
+  // Menu thu gọn (chỉ icon): hiện thẳng các mục, không có tiêu đề nhóm
+  if (collapsed) {
+    return (
+      <div className="space-y-1 border-t border-slate-200/80 pt-3">
+        {section.items.map((item) => (
+          <SidebarNavLink
+            key={item.href}
+            item={item}
+            pathname={pathname}
+            collapsed
+            onNavigate={onNavigate}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-100"
+      >
+        <Icon className="h-4 w-4 shrink-0" />
+        <span className="flex-1 text-left">{section.title}</span>
+        <ChevronDown
+          className={cn(
+            'h-4 w-4 shrink-0 text-slate-400 transition-transform',
+            expanded && 'rotate-180',
+          )}
+        />
+      </button>
+      {expanded
+        ? section.items.map((item) => (
+            <SidebarNavLink
+              key={item.href}
+              item={item}
+              pathname={pathname}
+              nested
+              onNavigate={onNavigate}
+            />
+          ))
+        : null}
+    </div>
+  );
+}
+
+function SidebarNav({
+  pathname,
+  collapsed,
+  onNavigate,
+  sections,
+}: {
+  pathname: string;
+  collapsed?: boolean;
+  onNavigate?: () => void;
+  sections: NavSection[];
 }) {
   return (
     <nav
@@ -88,46 +310,70 @@ function SidebarNav({
         collapsed ? 'px-2' : 'px-3',
       )}
     >
-      {navSections.map((section, sectionIndex) => (
-        <div key={section.title ?? `section-${sectionIndex}`} className="space-y-1">
-          {section.title && !collapsed ? (
-            <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-              {section.title}
-            </p>
-          ) : null}
-          {section.items.map((item) => {
-            const active = isActive(item, pathname);
-            const Icon = item.icon;
-            return (
-              <Link
+      {sections.map((section, sectionIndex) =>
+        section.collapsible ? (
+          <CollapsibleNavSection
+            key={section.title ?? `section-${sectionIndex}`}
+            section={section}
+            pathname={pathname}
+            collapsed={collapsed}
+            onNavigate={onNavigate}
+          />
+        ) : (
+          <div
+            key={section.title ?? `section-${sectionIndex}`}
+            className="space-y-1"
+          >
+            {section.title && !collapsed ? (
+              <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                {section.title}
+              </p>
+            ) : null}
+            {section.items.map((item) => (
+              <SidebarNavLink
                 key={item.href}
-                href={item.href}
-                onClick={onNavigate}
-                title={collapsed ? item.label : undefined}
-                className={cn(
-                  'flex items-center rounded-md text-sm font-medium transition-colors',
-                  collapsed
-                    ? 'justify-center px-2 py-2.5'
-                    : 'gap-2.5 px-3 py-2',
-                  active
-                    ? 'bg-slate-900 text-white'
-                    : 'text-slate-700 hover:bg-slate-100',
-                )}
-                aria-current={active ? 'page' : undefined}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                {!collapsed ? <span>{item.label}</span> : null}
-              </Link>
-            );
-          })}
-        </div>
-      ))}
+                item={item}
+                pathname={pathname}
+                collapsed={collapsed}
+                onNavigate={onNavigate}
+              />
+            ))}
+          </div>
+        ),
+      )}
     </nav>
   );
 }
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const { user, logout } = useAuth();
+  const limited = isLimitedUser(user);
+  const readOnly = isReadOnlyUser(user);
+  // Tài khoản giới hạn: menu chỉ gồm các tính năng được cấp
+  const navSections: NavSection[] = limited
+    ? [
+        {
+          title: 'Tính năng được cấp',
+          items: userFeatures(user).map((f) => ({
+            href: f.href,
+            label: f.label,
+            icon: f.key === 'contracts.create' ? FilePlus : FileText,
+            match: (pathname: string) => featureMatchesPath(f, pathname),
+          })),
+        },
+        {
+          items: [
+            {
+              href: GUIDE_PATH,
+              label: 'Hướng dẫn',
+              icon: BookOpen,
+              match: (pathname: string) => pathname === GUIDE_PATH,
+            },
+          ],
+        },
+      ]
+    : buildNavSections(isSystemAdmin(user), readOnly);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
@@ -185,21 +431,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
           >
             {!collapsed ? (
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                  Finance Project
-                </p>
-                <p className="mt-1 font-serif text-lg font-semibold tracking-tight text-slate-900">
-                  Quản lý dự án
-                </p>
-              </div>
+              <AppLogo size={44} linked />
             ) : (
-              <p className="text-center font-serif text-sm font-semibold text-slate-900">
-                FP
-              </p>
+              <div className="flex justify-center">
+                <AppLogo size={36} iconOnly linked />
+              </div>
             )}
           </div>
-          <SidebarNav pathname={pathname} collapsed={collapsed} />
+          <SidebarNav
+            pathname={pathname}
+            collapsed={collapsed}
+            sections={navSections}
+          />
           <div className="border-t border-slate-200/80 p-2">
             <Button
               type="button"
@@ -223,7 +466,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-slate-200/80 bg-white/85 px-3 py-3 backdrop-blur sm:px-4 lg:px-5">
-            <div className="flex min-w-0 items-center gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-3">
               <Button
                 type="button"
                 variant="outline"
@@ -249,12 +492,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 )}
               </Button>
               <div className="min-w-0 md:hidden">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  Finance Project
-                </p>
-                <p className="truncate font-serif text-base font-semibold text-slate-900">
-                  Quản lý dự án
-                </p>
+                <AppLogo size={36} linked className="gap-2" />
               </div>
               <div className="hidden min-w-0 md:block">
                 <h1 className="font-serif text-xl font-semibold tracking-tight text-slate-900">
@@ -262,6 +500,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </h1>
               </div>
             </div>
+            {user ? <UserMenu user={user} onLogout={() => logout()} /> : null}
           </header>
 
           {mobileOpen ? (
@@ -274,14 +513,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               />
               <aside className="absolute inset-y-0 left-0 flex w-[min(18rem,88vw)] flex-col bg-white shadow-xl">
                 <div className="flex items-start justify-between border-b border-slate-200 px-4 py-4">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                      Finance Project
-                    </p>
-                    <p className="mt-1 font-serif text-lg font-semibold text-slate-900">
-                      Menu
-                    </p>
-                  </div>
+                  <AppLogo size={40} linked />
                   <Button
                     type="button"
                     variant="ghost"
@@ -295,6 +527,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <SidebarNav
                   pathname={pathname}
                   onNavigate={() => setMobileOpen(false)}
+                  sections={navSections}
                 />
               </aside>
             </div>
@@ -302,10 +535,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
           <div className="flex-1 px-3 py-4 sm:px-4 lg:px-5">
             <div className="sticky top-[61px] z-20 bg-slate-50/95 pt-1 backdrop-blur">
-              <Suspense fallback={null}>
-                <ContractSubNav />
-              </Suspense>
+              {hasFeature(user, 'contracts.list') ? (
+                <Suspense fallback={null}>
+                  <ContractSubNav />
+                </Suspense>
+              ) : null}
             </div>
+            {readOnly ? (
+              <div className="mb-3 flex items-center gap-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                <Eye className="h-4 w-4 shrink-0" />
+                Tài khoản chỉ xem — bạn xem được mọi số liệu nhưng không thêm,
+                sửa hoặc xóa dữ liệu.
+              </div>
+            ) : null}
             <main className="w-full min-w-0">{children}</main>
           </div>
         </div>

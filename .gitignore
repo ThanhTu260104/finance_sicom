@@ -36,3 +36,8 @@ coverage/
 # Misc
 *.tsbuildinfo
 .turbo/
+
+# Local scratch files
+/*.xlsx
+be/scripts/*.mp3
+*.log

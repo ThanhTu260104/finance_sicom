@@ -6,9 +6,20 @@ import {
   formatPeriod,
   isNegativeDecimal,
 } from '@/lib/format';
-import type { FinancialControlRow } from '@/lib/types';
+import type { BillingCycle, FinancialControlRow } from '@/lib/types';
+import {
+  BATCH_BAND_SVG_FILL,
+  batchLabel,
+  buildPeriodBatchDecorations,
+} from '@/lib/plan-batch-period-map';
 import { Button } from '@/components/ui/button';
+import {
+  CHART_BLUE,
+  CHART_GREEN,
+  CHART_SLATE,
+} from '@/lib/chart-colors';
 import { cn } from '@/lib/utils';
+import { useContractFlowLabels } from '@/lib/contract-kind';
 
 export type FinanceChartType = 'bar' | 'line' | 'area' | 'cumulative';
 
@@ -20,9 +31,9 @@ const CHART_OPTIONS: Array<{ key: FinanceChartType; label: string }> = [
 ];
 
 const SERIES = {
-  planned: { color: '#475569', label: 'Kế hoạch' },
-  acceptance: { color: '#0f766e', label: 'Nghiệm thu' },
-  collected: { color: '#1d4ed8', label: 'Thu tiền' },
+  planned: { color: CHART_SLATE, label: 'Kế hoạch' },
+  acceptance: { color: CHART_GREEN, label: 'Nghiệm thu' },
+  collected: { color: CHART_BLUE, label: 'Thu tiền' },
 } as const;
 
 function parseAmount(value?: string | null) {
@@ -40,6 +51,8 @@ type ChartPoint = {
   cumulativeCollection: number;
   timelineStatus: FinancialControlRow['timelineStatus'];
   cumulativeVariance: string;
+  batchSequence: number | null;
+  bandIndex: number | null;
 };
 
 function buildChartPoints(
@@ -83,11 +96,39 @@ function buildChartPoints(
       cumulativeVariance:
         row?.cumulativeVariance ??
         String(cumulativeAcceptance - cumulativePlanned),
+      batchSequence: row?.batchSequence ?? null,
+      bandIndex: null,
     };
   });
 }
 
+function applyBatchBandsToPoints(
+  points: ChartPoint[],
+  decorations: Map<
+    string,
+    { batchSequence: number; bandIndex: number }
+  >,
+): ChartPoint[] {
+  return points.map((p) => {
+    const d = decorations.get(p.period);
+    if (!d) return p;
+    return {
+      ...p,
+      batchSequence: d.batchSequence,
+      bandIndex: d.bandIndex,
+    };
+  });
+}
+
+/** HĐ thầu phụ / NCC: chuỗi "collected" là tiền chi trả */
+function useSeriesLabel() {
+  const flow = useContractFlowLabels();
+  return (key: keyof typeof SERIES) =>
+    key === 'collected' ? flow.cashFlow : SERIES[key].label;
+}
+
 function Legend() {
+  const seriesLabel = useSeriesLabel();
   return (
     <div className="flex flex-wrap gap-4 text-sm text-slate-600">
       {(Object.keys(SERIES) as Array<keyof typeof SERIES>).map((key) => (
@@ -96,7 +137,7 @@ function Legend() {
             className="h-2.5 w-2.5 rounded-full"
             style={{ background: SERIES[key].color }}
           />
-          {SERIES[key].label}
+          {seriesLabel(key)}
         </span>
       ))}
     </div>
@@ -104,6 +145,7 @@ function Legend() {
 }
 
 function DetailPanel({ point }: { point: ChartPoint }) {
+  const seriesLabel = useSeriesLabel();
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
       <p className="text-sm font-semibold text-slate-900">
@@ -125,7 +167,7 @@ function DetailPanel({ point }: { point: ChartPoint }) {
                 className="h-2 w-2 rounded-full"
                 style={{ background: SERIES[key].color }}
               />
-              {SERIES[key].label}
+              {seriesLabel(key)}
             </p>
             <p className="mt-0.5 text-sm font-semibold text-slate-900">
               {formatCurrencyVND(String(value))}
@@ -137,10 +179,19 @@ function DetailPanel({ point }: { point: ChartPoint }) {
   );
 }
 
-function useChartGeometry(pointCount: number, compact = false) {
+function useChartGeometry(
+  pointCount: number,
+  compact = false,
+  showBatchLabels = false,
+) {
   const width = Math.max(compact ? 480 : 720, pointCount * (compact ? 40 : 56));
   const height = compact ? 180 : 280;
-  const padding = { top: 24, right: 20, bottom: 44, left: 16 };
+  const padding = {
+    top: 24,
+    right: 20,
+    bottom: showBatchLabels ? 56 : 44,
+    left: 16,
+  };
   const innerWidth = width - padding.left - padding.right;
   const innerHeight = height - padding.top - padding.bottom;
   return { width, height, padding, innerWidth, innerHeight };
@@ -179,25 +230,38 @@ function XLabels({
   points,
   toX,
   height,
+  showBatchLabels,
 }: {
   points: ChartPoint[];
   toX: (index: number) => number;
   height: number;
+  showBatchLabels?: boolean;
 }) {
   const step = points.length > 18 ? 2 : 1;
   return (
     <>
       {points.map((point, index) =>
         index % step === 0 ? (
-          <text
-            key={point.period}
-            x={toX(index)}
-            y={height - 12}
-            textAnchor="middle"
-            className="fill-slate-500 text-[10px]"
-          >
-            {formatPeriod(point.period)}
-          </text>
+          <g key={point.period}>
+            <text
+              x={toX(index)}
+              y={height - (showBatchLabels ? 26 : 12)}
+              textAnchor="middle"
+              className="fill-slate-500 text-[10px]"
+            >
+              {formatPeriod(point.period)}
+            </text>
+            {showBatchLabels && point.batchSequence != null ? (
+              <text
+                x={toX(index)}
+                y={height - 10}
+                textAnchor="middle"
+                className="fill-slate-400 text-[9px]"
+              >
+                {batchLabel(point.batchSequence)}
+              </text>
+            ) : null}
+          </g>
         ) : null,
       )}
     </>
@@ -209,14 +273,16 @@ function BarChartView({
   selectedPeriod,
   onSelect,
   compact = false,
+  showBatchLabels = false,
 }: {
   points: ChartPoint[];
   selectedPeriod: string | null;
   onSelect: (point: ChartPoint) => void;
   compact?: boolean;
+  showBatchLabels?: boolean;
 }) {
   const { width, height, padding, innerWidth, innerHeight } =
-    useChartGeometry(points.length, compact);
+    useChartGeometry(points.length, compact, showBatchLabels);
   const maxValue = Math.max(
     ...points.flatMap((p) => [p.planned, p.acceptance, p.collected]),
     1,
@@ -231,6 +297,12 @@ function BarChartView({
       <Grid padding={padding} width={width} innerHeight={innerHeight} />
       {points.map((point, index) => {
         const groupX = padding.left + index * groupWidth;
+        const bandFill =
+          point.bandIndex != null
+            ? BATCH_BAND_SVG_FILL[
+                point.bandIndex % BATCH_BAND_SVG_FILL.length
+              ]
+            : null;
         const values = [
           ['planned', point.planned],
           ['acceptance', point.acceptance],
@@ -239,6 +311,16 @@ function BarChartView({
         const active = selectedPeriod === point.period;
         return (
           <g key={point.period}>
+            {bandFill ? (
+              <rect
+                x={groupX}
+                y={padding.top}
+                width={groupWidth}
+                height={innerHeight}
+                fill={bandFill}
+                opacity={0.85}
+              />
+            ) : null}
             {point.timelineStatus === 'CURRENT' ? (
               <rect
                 x={groupX}
@@ -286,6 +368,7 @@ function BarChartView({
         points={points}
         toX={(i) => padding.left + i * groupWidth + groupWidth / 2}
         height={height}
+        showBatchLabels={showBatchLabels}
       />
     </svg>
   );
@@ -297,15 +380,17 @@ function LineOrAreaChartView({
   selectedPeriod,
   onSelect,
   compact = false,
+  showBatchLabels = false,
 }: {
   points: ChartPoint[];
   mode: 'line' | 'area';
   selectedPeriod: string | null;
   onSelect: (point: ChartPoint) => void;
   compact?: boolean;
+  showBatchLabels?: boolean;
 }) {
   const { width, height, padding, innerWidth, innerHeight } =
-    useChartGeometry(points.length, compact);
+    useChartGeometry(points.length, compact, showBatchLabels);
   const maxValue = Math.max(
     ...points.flatMap((p) => [p.planned, p.acceptance, p.collected]),
     1,
@@ -394,7 +479,12 @@ function LineOrAreaChartView({
           />
         </g>
       ))}
-      <XLabels points={points} toX={toX} height={height} />
+      <XLabels
+        points={points}
+        toX={toX}
+        height={height}
+        showBatchLabels={showBatchLabels}
+      />
     </svg>
   );
 }
@@ -404,14 +494,16 @@ function CumulativeChartView({
   selectedPeriod,
   onSelect,
   compact = false,
+  showBatchLabels = false,
 }: {
   points: ChartPoint[];
   selectedPeriod: string | null;
   onSelect: (point: ChartPoint) => void;
   compact?: boolean;
+  showBatchLabels?: boolean;
 }) {
   const { width, height, padding, innerWidth, innerHeight } =
-    useChartGeometry(points.length, compact);
+    useChartGeometry(points.length, compact, showBatchLabels);
   const maxValue = Math.max(
     ...points.flatMap((p) => [
       p.cumulativePlanned,
@@ -468,7 +560,12 @@ function CumulativeChartView({
           />
         </g>
       ))}
-      <XLabels points={points} toX={toX} height={height} />
+      <XLabels
+        points={points}
+        toX={toX}
+        height={height}
+        showBatchLabels={showBatchLabels}
+      />
     </svg>
   );
 }
@@ -477,10 +574,12 @@ export function FinancialControlChart({
   rows,
   periods,
   compact = false,
+  billingCycle,
 }: {
   rows: FinancialControlRow[];
   periods: string[];
   compact?: boolean;
+  billingCycle?: BillingCycle;
 }) {
   const [selectedTypes, setSelectedTypes] = useState<FinanceChartType[]>([
     'bar',
@@ -488,9 +587,19 @@ export function FinancialControlChart({
   ]);
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null);
 
+  const batchDecorations = useMemo(
+    () => buildPeriodBatchDecorations(periods, rows, billingCycle),
+    [periods, rows, billingCycle],
+  );
+  const showBatchLabels = batchDecorations.size > 0;
+
   const points = useMemo(
-    () => buildChartPoints(rows, periods),
-    [rows, periods],
+    () =>
+      applyBatchBandsToPoints(
+        buildChartPoints(rows, periods),
+        batchDecorations,
+      ),
+    [rows, periods, batchDecorations],
   );
 
   const selectedPoint =
@@ -575,6 +684,7 @@ export function FinancialControlChart({
                 points={points}
                 selectedPeriod={selectedPeriod}
                 onSelect={(point) => setSelectedPeriod(point.period)}
+                showBatchLabels={showBatchLabels}
               />
             </div>
           </div>
@@ -607,6 +717,7 @@ export function FinancialControlChart({
                 mode="line"
                 selectedPeriod={selectedPeriod}
                 onSelect={(point) => setSelectedPeriod(point.period)}
+                showBatchLabels={showBatchLabels}
               />
             </div>
           </div>
@@ -639,6 +750,7 @@ export function FinancialControlChart({
                 mode="area"
                 selectedPeriod={selectedPeriod}
                 onSelect={(point) => setSelectedPeriod(point.period)}
+                showBatchLabels={showBatchLabels}
               />
             </div>
           </div>
@@ -670,6 +782,7 @@ export function FinancialControlChart({
                 points={points}
                 selectedPeriod={selectedPeriod}
                 onSelect={(point) => setSelectedPeriod(point.period)}
+                showBatchLabels={showBatchLabels}
               />
             </div>
           </div>

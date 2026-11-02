@@ -6,6 +6,8 @@
     "dev": "next dev --port 3003",
     "build": "next build",
     "start": "next start --port 3003",
+    "start:prod": "next start --port 3003",
+    "prod": "npm run build && npm run start:prod",
     "lint": "eslint"
   },
   "dependencies": {

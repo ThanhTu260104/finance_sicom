@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { Download, FileUp, FileDown, X } from 'lucide-react';
+import { Download, FileUp, FileDown, Loader2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
 import { normalizeOptionalDate } from '@/lib/csv';
@@ -22,6 +22,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
+import { useCanWrite } from '@/components/auth/auth-provider';
 
 export type CsvSelectOption = { value: string; label: string };
 
@@ -32,8 +33,10 @@ export type CsvColumn = {
   required?: boolean;
   sample?: string;
   /** Preview editor type */
-  type?: 'text' | 'select' | 'money' | 'period' | 'date';
+  type?: 'text' | 'select' | 'multi-select' | 'money' | 'period' | 'date';
   options?: readonly CsvSelectOption[];
+  /** Separator for multi-select values (default ";") */
+  multiSeparator?: string;
 };
 
 export type CsvPreviewRow = {
@@ -46,11 +49,47 @@ type CsvDataTransferProps = {
   filenamePrefix: string;
   columns: readonly CsvColumn[];
   sampleRows?: Array<Record<string, string>>;
-  exportRows: Array<Record<string, string>>;
+  /** Dòng xuất tức thì (vd. trang hiện tại). Bỏ qua nếu có `onExport`. */
+  exportRows?: Array<Record<string, string>>;
+  /** Gom đủ dữ liệu trước khi xuất (vd. mọi trang + bộ lọc). */
+  onExport?: () => Promise<Array<Record<string, string>>>;
   validateRow: (row: Record<string, string>, index: number) => string[];
   onImport: (rows: Array<Record<string, string>>) => Promise<void | boolean>;
   className?: string;
+  /** Chỉ xuất / mẫu — ẩn nút nhập Excel */
+  hideImport?: boolean;
+  hideTemplate?: boolean;
 };
+
+function excelHeader(col: CsvColumn) {
+  return col.required ? `${col.header} (*)` : col.header;
+}
+
+/** Bỏ dấu tiếng Việt để khớp header Excel (Truong du an ≈ TruongDuAn). */
+function foldHeaderAscii(header: string) {
+  return header
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/gi, 'd');
+}
+
+/** Normalize Excel header for matching: trim, lower, strip (*) / *, bỏ dấu & khoảng trắng */
+function normalizeHeaderKey(header: string) {
+  return foldHeaderAscii(
+    header
+      .trim()
+      .toLowerCase()
+      .replace(/\s*\(\*\)\s*$/g, '')
+      .replace(/\s*\*+\s*$/g, '')
+      .trim(),
+  ).replace(/\s+/g, '');
+}
+
+function columnMatchNames(col: CsvColumn) {
+  return [col.key, col.header, excelHeader(col), ...(col.aliases ?? [])].map(
+    (n) => normalizeHeaderKey(n),
+  );
+}
 
 function rebuildPreview(
   rows: Array<Record<string, string>>,
@@ -62,8 +101,20 @@ function rebuildPreview(
   }));
 }
 
-function downloadExcel(filename: string, headers: string[], rows: string[][]) {
-  const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+function sanitizeExcelSheetName(name: string, used: Set<string>) {
+  let base = name.replace(/[\\/*?:[\]]/g, '_').trim() || 'Sheet';
+  if (base.length > 31) base = base.slice(0, 31);
+  let candidate = base;
+  let n = 1;
+  while (used.has(candidate)) {
+    const suffix = `_${n++}`;
+    candidate = `${base.slice(0, 31 - suffix.length)}${suffix}`;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
+function setSheetColWidths(sheet: XLSX.WorkSheet, headers: string[], rows: string[][]) {
   sheet['!cols'] = headers.map((header, index) => ({
     wch: Math.max(
       header.length + 2,
@@ -71,9 +122,105 @@ function downloadExcel(filename: string, headers: string[], rows: string[][]) {
       14,
     ),
   }));
+}
+
+export function downloadExcel(
+  filename: string,
+  headers: string[],
+  rows: string[][],
+) {
+  const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  setSheetColWidths(sheet, headers, rows);
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, sheet, 'Du lieu');
+  const used = new Set<string>();
+  XLSX.utils.book_append_sheet(
+    workbook,
+    sheet,
+    sanitizeExcelSheetName('Du lieu', used),
+  );
   XLSX.writeFile(workbook, filename, { compression: true });
+}
+
+/** Template: sheet dữ liệu + sheet danh mục cho từng cột select (MaLoai, …). */
+function downloadTemplateExcel(
+  filename: string,
+  columns: readonly CsvColumn[],
+  dataRows: Array<Record<string, string>>,
+) {
+  const headers = columns.map(excelHeader);
+  const matrix = dataRows.map((row) =>
+    columns.map((c) => row[c.key] ?? ''),
+  );
+  const workbook = XLSX.utils.book_new();
+  const used = new Set<string>();
+
+  const dataSheet = XLSX.utils.aoa_to_sheet([headers, ...matrix]);
+  setSheetColWidths(dataSheet, headers, matrix);
+  XLSX.utils.book_append_sheet(
+    workbook,
+    dataSheet,
+    sanitizeExcelSheetName('Du lieu', used),
+  );
+
+  for (const col of columns) {
+    if (
+      (col.type !== 'select' && col.type !== 'multi-select') ||
+      !col.options?.length
+    ) {
+      continue;
+    }
+    const refHeaders = ['Ma (nhap vao cot)', 'Mo ta'];
+    const refRows = col.options.map((opt) => [opt.value, opt.label]);
+    const refSheet = XLSX.utils.aoa_to_sheet([refHeaders, ...refRows]);
+    setSheetColWidths(refSheet, refHeaders, refRows);
+    const sheetTitle = col.header || col.key;
+    XLSX.utils.book_append_sheet(
+      workbook,
+      refSheet,
+      sanitizeExcelSheetName(sheetTitle, used),
+    );
+  }
+
+  XLSX.writeFile(workbook, filename, { compression: true });
+}
+
+function buildDefaultTemplateRows(
+  columns: readonly CsvColumn[],
+  sampleRows?: Array<Record<string, string>>,
+): Array<Record<string, string>> {
+  if (sampleRows?.length) return sampleRows;
+
+  const base = Object.fromEntries(
+    columns.map((col) => [col.key, col.sample ?? '']),
+  );
+
+  const selectWithOpts = columns.find(
+    (c) =>
+      (c.type === 'select' || c.type === 'multi-select') &&
+      c.options &&
+      c.options.length > 0,
+  );
+
+  if (!selectWithOpts?.options?.length) {
+    return [base];
+  }
+
+  const maxExamples = Math.min(selectWithOpts.options.length, 5);
+  return selectWithOpts.options.slice(0, maxExamples).map((opt) => ({
+    ...base,
+    [selectWithOpts.key]: opt.value,
+  }));
+}
+
+function formatImportError(err: unknown): string {
+  if (!(err instanceof Error)) return 'Nhập file thất bại';
+  const details =
+    'details' in err
+      ? (err as Error & { details?: { message?: string | string[] } }).details
+      : undefined;
+  const raw = details?.message ?? err.message;
+  if (Array.isArray(raw)) return raw.join(' · ');
+  return String(raw || 'Nhập file thất bại');
 }
 
 export function CsvDataTransfer({
@@ -81,46 +228,67 @@ export function CsvDataTransfer({
   filenamePrefix,
   columns,
   sampleRows,
-  exportRows,
+  exportRows = [],
+  onExport,
   validateRow,
   onImport,
   className,
+  hideImport: hideImportProp = false,
+  hideTemplate: hideTemplateProp = false,
 }: CsvDataTransferProps) {
+  // Tài khoản chỉ xem: chỉ xuất file, không nhập / tải mẫu nhập
+  const writable = useCanWrite();
+  const hideImport = hideImportProp || !writable;
+  const hideTemplate = hideTemplateProp || !writable;
   const inputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [preview, setPreview] = useState<CsvPreviewRow[]>([]);
   const [fileName, setFileName] = useState('');
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
-  const defaultSample =
-    sampleRows ??
-    [
-      Object.fromEntries(
-        columns.map((col) => [col.key, col.sample ?? '']),
-      ),
-    ];
+  const templateRows = buildDefaultTemplateRows(columns, sampleRows);
 
   const handleDownloadTemplate = () => {
-    downloadExcel(
-      `${filenamePrefix}-mau.xlsx`,
-      columns.map((c) => c.header),
-      defaultSample.map((row) => columns.map((c) => row[c.key] ?? '')),
+    const hasOptionSheets = columns.some(
+      (c) =>
+        (c.type === 'select' || c.type === 'multi-select') &&
+        (c.options?.length ?? 0) > 0,
     );
-    toast.success('Đã tải file mẫu');
+    downloadTemplateExcel(
+      `${filenamePrefix}-mau.xlsx`,
+      columns,
+      templateRows,
+    );
+    toast.success(
+      hasOptionSheets
+        ? 'Đã tải file mẫu — sheet “Du lieu” + sheet danh mục (MaLoai…); cột (*) là bắt buộc'
+        : 'Đã tải file mẫu — cột có (*) là bắt buộc',
+    );
   };
 
-  const handleExport = () => {
-    if (exportRows.length === 0) {
-      toast.error('Chưa có dữ liệu để xuất');
-      return;
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const rows = onExport ? await onExport() : exportRows;
+      if (rows.length === 0) {
+        toast.error('Chưa có dữ liệu để xuất');
+        return;
+      }
+      const stamp = new Date().toISOString().slice(0, 10);
+      downloadExcel(
+        `${filenamePrefix}-${stamp}.xlsx`,
+        columns.map(excelHeader),
+        rows.map((row) => columns.map((c) => row[c.key] ?? '')),
+      );
+      toast.success(`Đã xuất ${rows.length} dòng`);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : 'Không xuất được file Excel',
+      );
+    } finally {
+      setExporting(false);
     }
-    const stamp = new Date().toISOString().slice(0, 10);
-    downloadExcel(
-      `${filenamePrefix}-${stamp}.xlsx`,
-      columns.map((c) => c.header),
-      exportRows.map((row) => columns.map((c) => row[c.key] ?? '')),
-    );
-    toast.success(`Đã xuất ${exportRows.length} dòng`);
   };
 
   const handleFile = async (file: File) => {
@@ -129,8 +297,11 @@ export function CsvDataTransfer({
         type: 'array',
         cellDates: false,
       });
-      const firstSheetName = workbook.SheetNames[0];
-      const sheet = firstSheetName ? workbook.Sheets[firstSheetName] : undefined;
+      const dataSheetName =
+        workbook.SheetNames.find(
+          (n) => normalizeHeaderKey(n) === 'dulieu',
+        ) ?? workbook.SheetNames[0];
+      const sheet = dataSheetName ? workbook.Sheets[dataSheetName] : undefined;
       const matrix = sheet
         ? XLSX.utils.sheet_to_json<unknown[]>(sheet, {
             header: 1,
@@ -143,61 +314,73 @@ export function CsvDataTransfer({
         .slice(1)
         .filter((row) => row.some((cell) => String(cell ?? '').trim() !== ''))
         .map((row) => row.map((cell) => String(cell ?? '')));
-    if (headers.length === 0) {
-      toast.error('File Excel trống hoặc không đọc được');
-      return;
-    }
-
-    const normalizedHeaders = headers.map((h) => h.trim().toLowerCase());
-    const missingRequired = columns.filter((col) => {
-      if (!col.required) return false;
-      const names = [col.key, col.header, ...(col.aliases ?? [])].map((n) =>
-        n.toLowerCase(),
-      );
-      return !names.some((n) => normalizedHeaders.includes(n));
-    });
-    if (missingRequired.length > 0) {
-      toast.error(
-        `Thiếu cột bắt buộc: ${missingRequired.map((c) => c.header).join(', ')}`,
-      );
-      return;
-    }
-
-    const mapped = rows.map((row) => {
-      const values: Record<string, string> = {};
-      for (const col of columns) {
-        const names = [col.key, col.header, ...(col.aliases ?? [])].map((n) =>
-          n.toLowerCase(),
-        );
-        const idx = normalizedHeaders.findIndex((h) => names.includes(h));
-        let cell = idx >= 0 ? (row[idx] ?? '').trim() : '';
-        if (col.type === 'money' && cell) {
-          cell = parseGroupedNumber(cell) || cell;
-        }
-        if (col.type === 'select' && col.options?.length && cell) {
-          const match = col.options.find(
-            (opt) =>
-              opt.value.toLowerCase() === cell.toLowerCase() ||
-              opt.label.toLowerCase() === cell.toLowerCase(),
-          );
-          if (match) cell = match.value;
-        }
-        if (col.type === 'date' && cell) {
-          cell = normalizeOptionalDate(cell);
-        }
-        values[col.key] = cell;
+      if (headers.length === 0) {
+        toast.error('File Excel trống hoặc không đọc được');
+        return;
       }
-      return values;
-    });
 
-    if (mapped.length === 0) {
-      toast.error('File không có dòng dữ liệu');
-      return;
-    }
+      const normalizedHeaders = headers.map(normalizeHeaderKey);
+      const missingRequired = columns.filter((col) => {
+        if (!col.required) return false;
+        const names = columnMatchNames(col);
+        return !names.some((n) => normalizedHeaders.includes(n));
+      });
+      if (missingRequired.length > 0) {
+        toast.error(
+          `Thiếu cột bắt buộc (*): ${missingRequired.map((c) => c.header).join(', ')}`,
+        );
+        return;
+      }
 
-    setPreview(rebuildPreview(mapped, validateRow));
-    setFileName(file.name);
-    setOpen(true);
+      const mapped = rows.map((row) => {
+        const values: Record<string, string> = {};
+        for (const col of columns) {
+          const names = columnMatchNames(col);
+          const idx = normalizedHeaders.findIndex((h) => names.includes(h));
+          let cell = idx >= 0 ? (row[idx] ?? '').trim() : '';
+          if (col.type === 'money' && cell) {
+            cell = parseGroupedNumber(cell) || cell;
+          }
+          if (col.type === 'select' && col.options?.length && cell) {
+            const match = col.options.find(
+              (opt) =>
+                opt.value.toLowerCase() === cell.toLowerCase() ||
+                opt.label.toLowerCase() === cell.toLowerCase(),
+            );
+            if (match) cell = match.value;
+          }
+          if (col.type === 'multi-select' && col.options?.length && cell) {
+            const sep = col.multiSeparator ?? ';';
+            const resolved = cell
+              .split(sep)
+              .map((part) => part.trim())
+              .filter(Boolean)
+              .map((part) => {
+                const match = col.options!.find(
+                  (opt) =>
+                    opt.value.toLowerCase() === part.toLowerCase() ||
+                    opt.label.toLowerCase() === part.toLowerCase(),
+                );
+                return match?.value ?? part;
+              });
+            cell = [...new Set(resolved)].join(sep);
+          }
+          if (col.type === 'date' && cell) {
+            cell = normalizeOptionalDate(cell);
+          }
+          values[col.key] = cell;
+        }
+        return values;
+      });
+
+      if (mapped.length === 0) {
+        toast.error('File không có dòng dữ liệu');
+        return;
+      }
+
+      setPreview(rebuildPreview(mapped, validateRow));
+      setFileName(file.name);
+      setOpen(true);
     } catch {
       toast.error('Không thể đọc file Excel. Vui lòng dùng file .xlsx hợp lệ.');
     }
@@ -243,7 +426,7 @@ export function CsvDataTransfer({
       setFileName('');
       if (inputRef.current) inputRef.current.value = '';
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Nhập file thất bại');
+      toast.error(formatImportError(err), { duration: 8000 });
     } finally {
       setImporting(false);
     }
@@ -268,6 +451,39 @@ export function CsvDataTransfer({
             </option>
           ))}
         </Select>
+      );
+    }
+
+    if (col.type === 'multi-select' && col.options) {
+      const sep = col.multiSeparator ?? ';';
+      const selected = new Set(
+        value
+          .split(sep)
+          .map((p) => p.trim())
+          .filter(Boolean),
+      );
+      return (
+        <div className="flex min-w-[180px] flex-col gap-1.5 py-1">
+          {col.options.map((opt) => (
+            <label
+              key={opt.value}
+              className="inline-flex cursor-pointer items-center gap-2 text-sm text-slate-700"
+            >
+              <input
+                type="checkbox"
+                className="h-3.5 w-3.5 rounded border-slate-300"
+                checked={selected.has(opt.value)}
+                onChange={(e) => {
+                  const next = new Set(selected);
+                  if (e.target.checked) next.add(opt.value);
+                  else next.delete(opt.value);
+                  updateCell(rowIndex, col.key, [...next].join(sep));
+                }}
+              />
+              {opt.label}
+            </label>
+          ))}
+        </div>
       );
     }
 
@@ -331,32 +547,50 @@ export function CsvDataTransfer({
   return (
     <>
       <div className={cn('flex flex-wrap gap-2', className)}>
-        <Button size="sm" variant="outline" onClick={handleDownloadTemplate}>
-          <Download className="h-4 w-4" />
-          File mẫu
-        </Button>
-        <Button size="sm" variant="outline" onClick={handleExport}>
-          <FileDown className="h-4 w-4" />
-          Xuất Excel
-        </Button>
+        {hideTemplate ? null : (
+          <Button size="sm" variant="outline" onClick={handleDownloadTemplate}>
+            <Download className="h-4 w-4" />
+            File mẫu
+          </Button>
+        )}
         <Button
           size="sm"
           variant="outline"
-          onClick={() => inputRef.current?.click()}
+          onClick={() => void handleExport()}
+          disabled={exporting}
         >
-          <FileUp className="h-4 w-4" />
-          Nhập Excel
+          {exporting ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <FileDown className="h-4 w-4" />
+          )}
+          Xuất Excel
         </Button>
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) void handleFile(file);
-          }}
-        />
+        {hideImport ? null : (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => inputRef.current?.click()}
+            >
+              <FileUp className="h-4 w-4" />
+              Nhập Excel
+            </Button>
+            <span className="self-center text-xs text-slate-500">
+              Cột <span className="font-medium">(*)</span> = bắt buộc
+            </span>
+            <input
+              ref={inputRef}
+              type="file"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void handleFile(file);
+              }}
+            />
+          </>
+        )}
       </div>
 
       {open ? (
@@ -370,8 +604,8 @@ export function CsvDataTransfer({
                 <p className="mt-1 text-sm text-slate-500">
                   File: {fileName || '—'} · {preview.length} dòng ·{' '}
                   {validRows.length} hợp lệ
-                  {errorCount > 0 ? ` · ${errorCount} lỗi` : ''} — có thể chọn
-                  lại trạng thái / kỳ / số tiền trước khi nhập
+                  {errorCount > 0 ? ` · ${errorCount} lỗi` : ''} — cột có{' '}
+                  <span className="font-medium">(*)</span> là bắt buộc
                 </p>
               </div>
               <Button
@@ -393,7 +627,9 @@ export function CsvDataTransfer({
                     <TableRow>
                       <TableHead className="w-12">#</TableHead>
                       {columns.map((col) => (
-                        <TableHead key={col.key}>{col.header}</TableHead>
+                        <TableHead key={col.key}>
+                          {excelHeader(col)}
+                        </TableHead>
                       ))}
                       <TableHead>Kiểm tra</TableHead>
                     </TableRow>
@@ -469,8 +705,8 @@ export function CsvDataTransfer({
 
 /** Generate YYYY-MM options for import selects. */
 export function buildPeriodOptions(
-  startYear = new Date().getFullYear() - 1,
-  endYear = new Date().getFullYear() + 1,
+  startYear = new Date().getFullYear() - 15,
+  endYear = new Date().getFullYear() + 15,
 ) {
   const options: CsvSelectOption[] = [];
   for (let y = startYear; y <= endYear; y++) {

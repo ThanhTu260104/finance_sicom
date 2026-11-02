@@ -15,26 +15,22 @@ import { toDecimalString } from '../../common/utils/decimal.util';
 import { CreateAcceptanceDto } from './dto/create-acceptance.dto';
 import { UpdateAcceptanceDto } from './dto/update-acceptance.dto';
 import { BulkAcceptanceDto } from './dto/bulk-acceptance.dto';
+import { AccountingImportDto } from './dto/accounting-import.dto';
 import {
   removeAutoCollectionForAcceptance,
   syncAcceptanceCollectionLink,
 } from '../../common/utils/acceptance-collection.sync';
+import {
+  computeAcceptancePaymentAging,
+  paymentDueDateFromInvoice,
+} from '../../common/utils/acceptance-payment-aging.util';
+import {
+  parseBatchSequenceFromAcceptanceNo,
+  periodFromUtcDate,
+} from '../../common/utils/acceptance-batch.util';
 
-function startOfDay(date: Date) {
-  return new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
-  );
-}
-
-function addDays(date: Date, days: number) {
-  const result = new Date(date);
-  result.setUTCDate(result.getUTCDate() + days);
-  return result;
-}
-
-function diffDays(from: Date, to: Date) {
-  const ms = startOfDay(to).getTime() - startOfDay(from).getTime();
-  return Math.floor(ms / (24 * 60 * 60 * 1000));
+function normalizeContractNo(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 @Injectable()
@@ -102,38 +98,16 @@ export class AcceptancesService {
     paymentTermDays: number,
     asOf: Date = new Date(),
   ) {
-    const invoiceDate = row.invoiceDate;
-    const paymentDueDate = invoiceDate
-      ? addDays(startOfDay(invoiceDate), paymentTermDays)
-      : null;
+    const paymentDueDate = paymentDueDateFromInvoice(
+      row.invoiceDate,
+      paymentTermDays,
+    );
 
-    let agingDays: number | null = null;
-    let daysUntilDue: number | null = null;
-
-    if (paymentDueDate) {
-      const delta = diffDays(paymentDueDate, asOf);
-      if (delta >= 0) {
-        agingDays = delta;
-        daysUntilDue = 0;
-      } else {
-        agingDays = 0;
-        daysUntilDue = Math.abs(delta);
-      }
-    }
-
-    // Chưa nộp / chưa nghiệm thu → không tính tuổi nợ thu tiền
-    if (
-      row.documentStatus === DocumentStatus.NOT_SUBMITTED ||
-      row.paymentStatus === AcceptancePaymentStatus.NOT_ACCEPTED
-    ) {
-      agingDays = null;
-      daysUntilDue = null;
-    }
-
-    if (row.paymentStatus === AcceptancePaymentStatus.COLLECTED) {
-      agingDays = 0;
-      daysUntilDue = 0;
-    }
+    const { agingDays, daysUntilDue } = computeAcceptancePaymentAging(
+      row,
+      paymentTermDays,
+      asOf,
+    );
 
     return {
       ...row,
@@ -151,9 +125,7 @@ export class AcceptancesService {
       where: { contractId, deletedAt: null },
       orderBy: [{ period: 'asc' }, { createdAt: 'desc' }],
     });
-    return rows.map((row) =>
-      this.mapAcceptance(row, contract.paymentTermDays),
-    );
+    return rows.map((row) => this.mapAcceptance(row, contract.paymentTermDays));
   }
 
   async findOne(id: string) {
@@ -183,13 +155,100 @@ export class AcceptancesService {
     };
   }
 
+  private async resolveAcceptanceBatchLink(
+    contractId: string,
+    input: {
+      acceptanceNo: string;
+      scheduleId?: string | null;
+      period: string;
+      revenuePlanId?: string | null;
+    },
+  ) {
+    const [plans, schedules] = await Promise.all([
+      this.prisma.revenuePlan.findMany({
+        where: { contractId },
+        orderBy: { batchSequence: 'asc' },
+      }),
+      this.prisma.acceptanceSchedule.findMany({
+        where: { contractId, deletedAt: null },
+        orderBy: { sequence: 'asc' },
+      }),
+    ]);
+
+    const explicitPeriod = input.period?.trim() ?? '';
+    const hasExplicitPeriod = /^\d{4}-(0[1-9]|1[0-2])$/.test(explicitPeriod);
+
+    if (input.revenuePlanId) {
+      const selected = plans.find((p) => p.id === input.revenuePlanId);
+      if (selected) {
+        return {
+          scheduleId:
+            selected.scheduleId ?? input.scheduleId ?? null,
+          period: hasExplicitPeriod ? explicitPeriod : selected.period,
+        };
+      }
+    }
+
+    const batch = parseBatchSequenceFromAcceptanceNo(input.acceptanceNo);
+    let scheduleId = input.scheduleId ?? null;
+
+    const schedule =
+      (scheduleId
+        ? schedules.find((s) => s.id === scheduleId)
+        : null) ??
+      (batch != null
+        ? schedules.find((s) => s.sequence === batch)
+        : null);
+
+    if (schedule && !scheduleId) {
+      scheduleId = schedule.id;
+    }
+
+    if (hasExplicitPeriod) {
+      if (!scheduleId && batch != null) {
+        const planByBatch = plans.find((p) => p.batchSequence === batch);
+        if (planByBatch?.scheduleId) scheduleId = planByBatch.scheduleId;
+      }
+      return { scheduleId, period: explicitPeriod };
+    }
+
+    let period = explicitPeriod;
+    const planBySchedule = scheduleId
+      ? plans.find((p) => p.scheduleId === scheduleId)
+      : null;
+    const planByBatch =
+      batch != null
+        ? plans.find((p) => p.batchSequence === batch)
+        : null;
+    const plan = planBySchedule ?? planByBatch;
+
+    if (plan) {
+      period = plan.period;
+      if (!scheduleId && plan.scheduleId) {
+        scheduleId = plan.scheduleId;
+      }
+    } else if (schedule?.endPeriod) {
+      period = schedule.endPeriod;
+    } else if (schedule?.endDate) {
+      period = periodFromUtcDate(schedule.endDate);
+    }
+
+    return { scheduleId, period };
+  }
+
   async create(contractId: string, dto: CreateAcceptanceDto) {
     await this.ensureContract(contractId);
+
+    const linked = await this.resolveAcceptanceBatchLink(contractId, {
+      acceptanceNo: dto.acceptanceNo,
+      scheduleId: dto.scheduleId,
+      period: dto.period,
+      revenuePlanId: dto.revenuePlanId,
+    });
 
     const existing = await this.prisma.acceptance.findFirst({
       where: {
         contractId,
-        scheduleId: dto.scheduleId,
         acceptanceNo: dto.acceptanceNo,
         deletedAt: null,
       },
@@ -209,8 +268,9 @@ export class AcceptancesService {
     const created = await this.prisma.acceptance.create({
       data: {
         contractId,
+        scheduleId: linked.scheduleId,
         acceptanceNo: dto.acceptanceNo,
-        period: dto.period,
+        period: linked.period,
         amount: dto.amount,
         note: dto.note,
         invoiceNo: dto.invoiceNo,
@@ -218,6 +278,7 @@ export class AcceptancesService {
           ? new Date(dto.acceptanceDate)
           : undefined,
         invoiceDate: dto.invoiceDate ? new Date(dto.invoiceDate) : undefined,
+        paymentDate: dto.paymentDate ? new Date(dto.paymentDate) : undefined,
         ...statuses,
       },
     });
@@ -261,15 +322,24 @@ export class AcceptancesService {
       status: dto.status ?? current.status,
     });
 
+    const acceptanceNo = dto.acceptanceNo ?? current.acceptanceNo;
+    const linked = await this.resolveAcceptanceBatchLink(current.contractId, {
+      acceptanceNo,
+      scheduleId:
+        dto.scheduleId !== undefined ? dto.scheduleId : current.scheduleId,
+      period: dto.period ?? current.period,
+      revenuePlanId: dto.revenuePlanId,
+    });
+
     const updated = await this.prisma.acceptance.update({
       where: { id },
       data: {
         ...(dto.acceptanceNo !== undefined
           ? { acceptanceNo: dto.acceptanceNo }
           : {}),
-        ...(dto.period !== undefined ? { period: dto.period } : {}),
+        scheduleId: linked.scheduleId,
+        period: linked.period,
         ...(dto.amount !== undefined ? { amount: dto.amount } : {}),
-        ...(dto.scheduleId !== undefined ? { scheduleId: dto.scheduleId || null } : {}),
         ...(dto.note !== undefined ? { note: dto.note } : {}),
         ...(dto.invoiceNo !== undefined ? { invoiceNo: dto.invoiceNo } : {}),
         ...(dto.acceptanceDate !== undefined
@@ -282,6 +352,11 @@ export class AcceptancesService {
         ...(dto.invoiceDate !== undefined
           ? {
               invoiceDate: dto.invoiceDate ? new Date(dto.invoiceDate) : null,
+            }
+          : {}),
+        ...(dto.paymentDate !== undefined
+          ? {
+              paymentDate: dto.paymentDate ? new Date(dto.paymentDate) : null,
             }
           : {}),
         ...statuses,
@@ -362,5 +437,118 @@ export class AcceptancesService {
     }
 
     return { count: results.length, created, updated, data: results };
+  }
+
+  async importAccounting(dto: AccountingImportDto) {
+    let items = dto.items ?? [];
+    if (!items.length) {
+      throw new BadRequestException('No items to import');
+    }
+
+    const onlyNorm = dto.onlyContractNo
+      ? normalizeContractNo(dto.onlyContractNo)
+      : null;
+    if (onlyNorm) {
+      items = items.filter(
+        (item) => normalizeContractNo(item.contractNo) === onlyNorm,
+      );
+      if (!items.length) {
+        throw new BadRequestException(
+          'Không có dòng nào khớp hợp đồng được chọn',
+        );
+      }
+    }
+
+    const contracts = await this.prisma.contract.findMany({
+      where: { deletedAt: null },
+      include: { project: { select: { code: true } } },
+    });
+    const contractByNo = new Map<
+      string,
+      (typeof contracts)[number]
+    >();
+    for (const c of contracts) {
+      contractByNo.set(normalizeContractNo(c.contractNo), c);
+    }
+
+    const grouped = new Map<string, BulkAcceptanceDto['items']>();
+    const errors: Array<{
+      contractNo: string;
+      acceptanceNo: string;
+      message: string;
+    }> = [];
+    const warnings: Array<{ contractNo: string; message: string }> = [];
+    const seen = new Set<string>();
+
+    for (const item of items) {
+      const normNo = normalizeContractNo(item.contractNo);
+      const contract = contractByNo.get(normNo);
+      if (!contract) {
+        errors.push({
+          contractNo: item.contractNo,
+          acceptanceNo: item.acceptanceNo,
+          message: 'Không tìm thấy hợp đồng trong hệ thống',
+        });
+        continue;
+      }
+
+      if (item.projectCode?.trim()) {
+        const fromFile = item.projectCode.trim().toLowerCase();
+        const inDb = contract.project?.code?.trim().toLowerCase();
+        if (inDb && fromFile !== inDb) {
+          warnings.push({
+            contractNo: item.contractNo,
+            message: `Mã dự án file (${item.projectCode}) khác DB (${contract.project?.code})`,
+          });
+        }
+      }
+
+      const dupKey = `${contract.id}|${item.acceptanceNo.trim().toLowerCase()}`;
+      if (seen.has(dupKey)) {
+        errors.push({
+          contractNo: item.contractNo,
+          acceptanceNo: item.acceptanceNo,
+          message: 'Trùng mã nghiệm thu trong cùng lần import',
+        });
+        continue;
+      }
+      seen.add(dupKey);
+
+      const linked = await this.resolveAcceptanceBatchLink(contract.id, {
+        acceptanceNo: item.acceptanceNo,
+        period: item.period,
+      });
+      const list = grouped.get(contract.id) ?? [];
+      list.push({
+        acceptanceNo: item.acceptanceNo,
+        period: linked.period,
+        scheduleId: linked.scheduleId ?? undefined,
+        amount: item.amount,
+        acceptanceDate: item.acceptanceDate,
+        invoiceNo: item.invoiceNo,
+        invoiceDate: item.invoiceDate,
+        documentStatus: item.documentStatus,
+        paymentStatus: item.paymentStatus,
+        note: item.note,
+      });
+      grouped.set(contract.id, list);
+    }
+
+    let created = 0;
+    let updated = 0;
+
+    for (const [contractId, bulkItems] of grouped) {
+      const result = await this.bulkUpsert(contractId, { items: bulkItems });
+      created += result.created;
+      updated += result.updated;
+    }
+
+    return {
+      created,
+      updated,
+      failed: errors.length,
+      errors,
+      warnings,
+    };
   }
 }

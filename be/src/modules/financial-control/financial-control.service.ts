@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import {
   compareDecimals,
   maxDecimal,
+  splitDecimalEqually,
   subtractDecimals,
   sumDecimals,
   toDecimalString,
@@ -17,6 +18,17 @@ import {
   generatePeriodsBetween,
   formatPeriodLabel,
 } from '../../common/utils/period.util';
+import {
+  expectedAcceptanceRounds,
+  generatePeriodsForRevenuePlanSchedule,
+  generatePeriodsInBillingRange,
+} from '../../common/contract-acceptance-rounds.util';
+import {
+  derivePeriodFromEndDate,
+  generateAcceptanceBatchWindows,
+  generateRevenuePlanWindowsFromContract,
+} from '../../common/utils/acceptance-batch.util';
+import { planDashboardMonth } from '../../common/utils/plan-dashboard-month.util';
 import { RevenuePlansService } from '../revenue-plans/revenue-plans.service';
 import {
   BulkPlanDto,
@@ -44,6 +56,8 @@ export class FinancialControlService {
       where: { id: contractId, deletedAt: null },
       include: {
         project: { select: { id: true, code: true, name: true } },
+        company: { select: { id: true, code: true, name: true } },
+        counterparty: { select: { id: true, code: true, name: true } },
       },
     });
     if (!contract) {
@@ -82,6 +96,38 @@ export class FinancialControlService {
     return flags;
   }
 
+  private monthOverlapsDateRange(
+    period: string,
+    start: Date,
+    end: Date,
+  ): boolean {
+    const [y, m] = period.split('-').map(Number);
+    const monthStart = new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0));
+    const monthEnd = new Date(Date.UTC(y, m, 0, 23, 59, 59, 999));
+    return monthStart <= end && monthEnd >= start;
+  }
+
+  private findRevenuePlanForPeriod<
+    T extends {
+      period: string;
+      batchSequence: number | null;
+      periodStartDate: Date | null;
+      periodEndDate: Date | null;
+    },
+  >(period: string, planList: T[]): T | undefined {
+    const exact = planList.find((p) => p.period === period);
+    if (exact) return exact;
+    for (const p of planList) {
+      if (!p.periodStartDate || !p.periodEndDate) continue;
+      if (
+        this.monthOverlapsDateRange(period, p.periodStartDate, p.periodEndDate)
+      ) {
+        return p;
+      }
+    }
+    return undefined;
+  }
+
   private sumByPeriod<T extends { period: string; amount: Decimal }>(
     rows: T[],
   ): Map<string, Decimal> {
@@ -102,42 +148,41 @@ export class FinancialControlService {
       approvedAcceptances,
       pendingSubmissionAcceptances,
       collections,
-    ] =
-      await Promise.all([
-        this.prisma.revenuePlan.findMany({
-          where: { contractId },
-          orderBy: { period: 'asc' },
-        }),
-        this.prisma.contractMonthlyFinancial.findMany({
-          where: { contractId },
-          orderBy: { period: 'asc' },
-        }),
-        this.prisma.acceptance.findMany({
-          where: {
-            contractId,
-            deletedAt: null,
-            status: AcceptanceStatus.APPROVED,
-            documentStatus: DocumentStatus.SUBMITTED_UNPAID,
+    ] = await Promise.all([
+      this.prisma.revenuePlan.findMany({
+        where: { contractId },
+        orderBy: { period: 'asc' },
+      }),
+      this.prisma.contractMonthlyFinancial.findMany({
+        where: { contractId },
+        orderBy: { period: 'asc' },
+      }),
+      this.prisma.acceptance.findMany({
+        where: {
+          contractId,
+          deletedAt: null,
+          status: AcceptanceStatus.APPROVED,
+          documentStatus: DocumentStatus.SUBMITTED_UNPAID,
+        },
+      }),
+      this.prisma.acceptance.findMany({
+        where: {
+          contractId,
+          deletedAt: null,
+          documentStatus: DocumentStatus.NOT_SUBMITTED,
+          status: {
+            in: [
+              AcceptanceStatus.DRAFT,
+              AcceptanceStatus.SUBMITTED,
+              AcceptanceStatus.APPROVED,
+            ],
           },
-        }),
-        this.prisma.acceptance.findMany({
-          where: {
-            contractId,
-            deletedAt: null,
-            documentStatus: DocumentStatus.NOT_SUBMITTED,
-            status: {
-              in: [
-                AcceptanceStatus.DRAFT,
-                AcceptanceStatus.SUBMITTED,
-                AcceptanceStatus.APPROVED,
-              ],
-            },
-          },
-        }),
-        this.prisma.collection.findMany({
-          where: { contractId, deletedAt: null },
-        }),
-      ]);
+        },
+      }),
+      this.prisma.collection.findMany({
+        where: { contractId, deletedAt: null },
+      }),
+    ]);
 
     const acceptanceByPeriod = this.sumByPeriod(
       approvedAcceptances.map((a) => ({ period: a.period, amount: a.amount })),
@@ -149,6 +194,18 @@ export class FinancialControlService {
       monthlyFinancials.map((m) => [m.period, m.actualWorkAmount]),
     );
     const planByPeriod = new Map(plans.map((p) => [p.period, p.plannedAmount]));
+
+    const acceptanceBatchWindows =
+      contract.startDate &&
+      contract.durationYears != null &&
+      contract.durationYears > 0
+        ? generateAcceptanceBatchWindows({
+            startDate: contract.startDate,
+            durationYears: contract.durationYears,
+            billingCycle: contract.billingCycle,
+            endDate: contract.endDate,
+          })
+        : [];
 
     const timelinePeriods =
       contract.startDate && contract.endDate
@@ -217,7 +274,18 @@ export class FinancialControlService {
       const monthlyFinancial = monthlyFinancials.find(
         (m) => m.period === period,
       );
-      const revenuePlan = plans.find((p) => p.period === period);
+      const revenuePlan = this.findRevenuePlanForPeriod(period, plans);
+      const batchWindow = acceptanceBatchWindows.find((w) =>
+        this.monthOverlapsDateRange(period, w.periodStartDate, w.periodEndDate),
+      );
+      const batchSequence =
+        revenuePlan?.batchSequence ?? batchWindow?.batchSequence ?? null;
+      const periodStartDate =
+        revenuePlan?.periodStartDate ??
+        batchWindow?.periodStartDate ??
+        null;
+      const periodEndDate =
+        revenuePlan?.periodEndDate ?? batchWindow?.periodEndDate ?? null;
 
       const scheduleStatus = this.resolveScheduleStatus(cumulativeVariance);
       const bottlenecks = this.resolveBottlenecks({
@@ -254,6 +322,11 @@ export class FinancialControlService {
         bottlenecks,
         timelineStatus,
         note: monthlyFinancial?.note ?? revenuePlan?.note ?? null,
+        batchSequence,
+        periodStartDate: periodStartDate?.toISOString() ?? null,
+        periodEndDate: periodEndDate?.toISOString() ?? null,
+        plannedAcceptanceDate:
+          revenuePlan?.plannedAcceptanceDate?.toISOString() ?? null,
       };
     });
 
@@ -291,8 +364,8 @@ export class FinancialControlService {
       plannedToDate.sub(submittedToDate).sub(pendingSubmissionToDate),
       0,
     );
-    const positivePlans = plans.filter((p) =>
-      compareDecimals(p.plannedAmount, 0) > 0,
+    const positivePlans = plans.filter(
+      (p) => compareDecimals(p.plannedAmount, 0) > 0,
     );
     const averageMonthlyPlanned =
       positivePlans.length > 0
@@ -302,28 +375,45 @@ export class FinancialControlService {
         : new Decimal(0);
     const currentPlanAmount =
       planByPeriod.get(currentPeriod) ?? averageMonthlyPlanned;
-    const acceptanceRate = compareDecimals(contract.contractValue, 0) > 0
-      ? totalAccepted.div(contract.contractValue).mul(100)
-      : new Decimal(0);
-    const scheduleRate = compareDecimals(plannedToDate, 0) > 0
-      ? submittedToDate.div(plannedToDate).mul(100)
-      : new Decimal(0);
+    const acceptanceRate =
+      compareDecimals(contract.contractValue, 0) > 0
+        ? totalAccepted.div(contract.contractValue).mul(100)
+        : new Decimal(0);
+    const scheduleRate =
+      compareDecimals(plannedToDate, 0) > 0
+        ? submittedToDate.div(plannedToDate).mul(100)
+        : new Decimal(0);
     const scheduleVariance = submittedToDate.sub(plannedToDate);
     const overallScheduleStatus = this.resolveScheduleStatus(scheduleVariance);
 
-    const collectionRate = compareDecimals(totalAccepted, 0) > 0
-      ? totalCollected.div(totalAccepted).mul(100)
-      : new Decimal(0);
+    const collectionRate =
+      compareDecimals(totalAccepted, 0) > 0
+        ? totalCollected.div(totalAccepted).mul(100)
+        : new Decimal(0);
 
     return {
       contract: {
         id: contract.id,
+        projectId: contract.projectId,
+        kind: contract.kind,
+        companyId: contract.companyId,
+        counterpartyId: contract.counterpartyId,
+        company: contract.company,
+        counterparty: contract.counterparty,
         contractNo: contract.contractNo,
         name: contract.name,
+        contractType: contract.contractType,
         contractValue: toDecimalString(contract.contractValue),
-        startDate: contract.startDate,
-        endDate: contract.endDate,
+        signedDate: contract.signedDate?.toISOString() ?? null,
+        startDate: contract.startDate?.toISOString() ?? null,
+        endDate: contract.endDate?.toISOString() ?? null,
+        billingCycle: contract.billingCycle,
         status: contract.status,
+        paymentTermDays: contract.paymentTermDays,
+        durationYears: contract.durationYears,
+        note: contract.note,
+        createdAt: contract.createdAt.toISOString(),
+        updatedAt: contract.updatedAt.toISOString(),
         project: contract.project,
       },
       summary: {
@@ -362,8 +452,96 @@ export class FinancialControlService {
     };
   }
 
+  private periodsFromAcceptanceSchedule(
+    contract: Awaited<ReturnType<FinancialControlService['ensureContract']>>,
+    range?: { fromPeriod: string; toPeriod: string },
+  ) {
+    if (range?.fromPeriod && range?.toPeriod) {
+      if (!contract.startDate) {
+        throw new BadRequestException(
+          'Chọn kỳ bắt đầu và kết thúc NT, hoặc nhập ngày bắt đầu HĐ',
+        );
+      }
+      if (contract.durationYears == null || contract.durationYears <= 0) {
+        throw new BadRequestException(
+          'Chọn kỳ bắt đầu và kết thúc NT, hoặc nhập thời hạn (năm) trên HĐ',
+        );
+      }
+      const periods = generatePeriodsForRevenuePlanSchedule({
+        startDate: contract.startDate,
+        durationYears: contract.durationYears,
+        billingCycle: contract.billingCycle,
+        endDate: contract.endDate,
+      }).filter(
+        (p) => p >= range.fromPeriod && p <= range.toPeriod,
+      );
+      if (periods.length === 0) {
+        throw new BadRequestException(
+          'Khoảng kỳ không hợp lệ (từ phải ≤ đến) hoặc không sinh được đợt NT',
+        );
+      }
+      return periods;
+    }
+
+    if (!contract.startDate) {
+      throw new BadRequestException(
+        'Chọn kỳ bắt đầu và kết thúc NT, hoặc nhập ngày bắt đầu HĐ',
+      );
+    }
+    if (contract.durationYears == null || contract.durationYears <= 0) {
+      throw new BadRequestException(
+        'Chọn kỳ bắt đầu và kết thúc NT, hoặc nhập thời hạn (năm) trên HĐ',
+      );
+    }
+    const periods = generatePeriodsForRevenuePlanSchedule({
+      startDate: contract.startDate,
+      durationYears: contract.durationYears,
+      billingCycle: contract.billingCycle,
+      endDate: contract.endDate,
+    });
+    if (periods.length === 0) {
+      throw new BadRequestException(
+        'Chu kỳ nghiệm thu (Milestone/Tùy chỉnh) không tự sinh kỳ — chọn khoảng kỳ tay hoặc đổi chu kỳ HĐ',
+      );
+    }
+    return periods;
+  }
+
   async generatePeriods(contractId: string, dto: GeneratePeriodsDto) {
     const contract = await this.ensureContract(contractId);
+
+    if (dto.useAcceptanceSchedule) {
+      const range =
+        dto.startPeriod && dto.endPeriod
+          ? { fromPeriod: dto.startPeriod, toPeriod: dto.endPeriod }
+          : undefined;
+      const periods = this.periodsFromAcceptanceSchedule(contract, range);
+      const acceptanceRounds =
+        contract.startDate &&
+        contract.durationYears != null &&
+        contract.durationYears > 0
+          ? new Set(
+              generateRevenuePlanWindowsFromContract({
+                startDate: contract.startDate,
+                durationYears: contract.durationYears,
+                billingCycle: contract.billingCycle,
+                endDate: contract.endDate,
+              })
+                .filter(
+                  (w) =>
+                    !range ||
+                    (w.period >= range.fromPeriod &&
+                      w.period <= range.toPeriod),
+                )
+                .map((w) => w.batchSequence),
+            ).size
+          : periods.length;
+      return {
+        periods,
+        acceptanceRounds,
+        contractValue: toDecimalString(contract.contractValue),
+      };
+    }
 
     if (dto.useContractDates !== false) {
       if (!contract.startDate || !contract.endDate) {
@@ -397,44 +575,106 @@ export class FinancialControlService {
         throw new BadRequestException('At least one period is required');
       }
 
-      const distributablePeriods = dto.firstPeriodZero
-        ? periods.slice(1)
-        : periods;
+      const planWindows =
+        contract.startDate && contract.durationYears
+          ? generateRevenuePlanWindowsFromContract({
+              startDate: contract.startDate,
+              durationYears: contract.durationYears,
+              billingCycle: contract.billingCycle,
+              endDate: contract.endDate,
+            })
+          : [];
+      const windowByPlanMonth = new Map(
+        planWindows.map((w) => [planDashboardMonth(w), w]),
+      );
+      const resolvePlanWindow = (period: string, index: number) =>
+        windowByPlanMonth.get(period) ??
+        planWindows.find((w) => w.period === period) ??
+        planWindows[index] ??
+        null;
 
-      if (distributablePeriods.length === 0) {
-        return {
-          items: periods.map((period) => ({
-            period,
-            plannedAmount: '0',
-            note: null,
-          })),
-          total: '0',
-          contractValue: toDecimalString(contract.contractValue),
-        };
+      const periodSet = new Set(periods);
+      const byBatch = new Map<number, typeof planWindows>();
+      for (const w of planWindows) {
+        if (!periodSet.has(w.period)) continue;
+        const list = byBatch.get(w.batchSequence) ?? [];
+        list.push(w);
+        byBatch.set(w.batchSequence, list);
+      }
+      for (const list of byBatch.values()) {
+        list.sort((a, b) => a.period.localeCompare(b.period));
+      }
+      const amountByPeriod = new Map<string, Decimal>();
+
+      if (byBatch.size === 0) {
+        const distributablePeriods = dto.firstPeriodZero
+          ? periods.slice(1)
+          : periods;
+        if (distributablePeriods.length === 0) {
+          for (const p of periods) {
+            amountByPeriod.set(p, new Decimal(0));
+          }
+        } else {
+          const flat = splitDecimalEqually(
+            contract.contractValue,
+            distributablePeriods.length,
+          );
+          distributablePeriods.forEach((p, i) => {
+            amountByPeriod.set(p, flat[i] ?? new Decimal(0));
+          });
+          if (dto.firstPeriodZero && periods.length > 0) {
+            amountByPeriod.set(periods[0], new Decimal(0));
+          }
+        }
+      } else {
+        const batchOrder = [...byBatch.keys()].sort((a, b) => a - b);
+        const distributableBatches =
+          dto.firstPeriodZero && batchOrder.length > 0
+            ? batchOrder.slice(1)
+            : batchOrder;
+
+        const batchTotals = new Map<number, Decimal>();
+        if (distributableBatches.length === 0) {
+          for (const b of batchOrder) {
+            batchTotals.set(b, new Decimal(0));
+          }
+        } else {
+          const batchAmounts = splitDecimalEqually(
+            contract.contractValue,
+            distributableBatches.length,
+          );
+          distributableBatches.forEach((b, i) => {
+            batchTotals.set(b, batchAmounts[i] ?? new Decimal(0));
+          });
+          if (dto.firstPeriodZero && batchOrder.length > 0) {
+            batchTotals.set(batchOrder[0], new Decimal(0));
+          }
+        }
+
+        for (const batchSeq of batchOrder) {
+          const slices = byBatch.get(batchSeq) ?? [];
+          const batchTotal = batchTotals.get(batchSeq) ?? new Decimal(0);
+          if (batchTotal.isZero() || slices.length === 0) {
+            for (const s of slices) {
+              amountByPeriod.set(s.period, new Decimal(0));
+            }
+            continue;
+          }
+          const sliceAmounts = splitDecimalEqually(batchTotal, slices.length);
+          slices.forEach((s, i) => {
+            amountByPeriod.set(s.period, sliceAmounts[i] ?? new Decimal(0));
+          });
+        }
       }
 
-      const perMonth = new Decimal(contract.contractValue).div(
-        distributablePeriods.length,
-      );
-      const rounded = perMonth.toDecimalPlaces(2, Decimal.ROUND_DOWN);
-      let allocated = new Decimal(0);
       const items = periods.map((period, index) => {
-        if (dto.firstPeriodZero && index === 0) {
-          return { period, plannedAmount: '0', note: null };
-        }
-
-        const distributableIndex = dto.firstPeriodZero ? index - 1 : index;
-        const isLast = distributableIndex === distributablePeriods.length - 1;
-        const amount = isLast
-          ? new Decimal(contract.contractValue).sub(allocated)
-          : rounded;
-
-        if (!dto.firstPeriodZero || index > 0) {
-          allocated = allocated.add(amount);
-        }
-
+        const w = resolvePlanWindow(period, index);
+        const amount = amountByPeriod.get(period) ?? new Decimal(0);
         return {
           period,
+          batchSequence: w?.batchSequence,
+          periodStartDate: w?.periodStartDate?.toISOString(),
+          periodEndDate: w?.periodEndDate?.toISOString(),
           plannedAmount: toDecimalString(amount),
           note: null,
         };
@@ -451,11 +691,33 @@ export class FinancialControlService {
   }
 
   async bulkUpsertPlans(contractId: string, dto: BulkPlanDto) {
-    await this.ensureContract(contractId);
+    const contract = await this.ensureContract(contractId);
+
+    if (dto.replaceExisting) {
+      await this.prisma.revenuePlan.deleteMany({ where: { contractId } });
+    }
 
     let items = dto.items ?? [];
 
-    if (dto.generateFromContractDates) {
+    if (dto.generateFromAcceptanceSchedule) {
+      const range =
+        dto.startPeriod && dto.endPeriod
+          ? { fromPeriod: dto.startPeriod, toPeriod: dto.endPeriod }
+          : undefined;
+      const periods = this.periodsFromAcceptanceSchedule(contract, range);
+      const draft = await this.draftEqualSplit(contractId, {
+        periods,
+        firstPeriodZero: dto.firstPeriodZero ?? false,
+      });
+      items = draft.items.map((item) => ({
+        period: item.period,
+        batchSequence: item.batchSequence,
+        periodStartDate: item.periodStartDate,
+        periodEndDate: item.periodEndDate,
+        plannedAmount: Number(item.plannedAmount),
+        note: item.note ?? undefined,
+      }));
+    } else if (dto.generateFromContractDates) {
       const { periods } = await this.generatePeriods(contractId, {
         useContractDates: true,
       });
@@ -467,6 +729,9 @@ export class FinancialControlService {
         });
         items = draft.items.map((item) => ({
           period: item.period,
+          batchSequence: item.batchSequence,
+          periodStartDate: item.periodStartDate,
+          periodEndDate: item.periodEndDate,
           plannedAmount: Number(item.plannedAmount),
           note: item.note ?? undefined,
         }));
@@ -485,20 +750,37 @@ export class FinancialControlService {
 
     const results = [];
     for (const item of items) {
+      const period =
+        item.period ??
+        (item.periodEndDate
+          ? derivePeriodFromEndDate(new Date(item.periodEndDate))
+          : undefined);
+      if (!period) {
+        throw new BadRequestException(
+          'Mỗi dòng kế hoạch cần kỳ hoặc ngày đến (periodEndDate)',
+        );
+      }
       const existing = await this.prisma.revenuePlan.findUnique({
         where: {
-          contractId_period: { contractId, period: item.period },
+          contractId_period: { contractId, period },
         },
       });
 
       if (existing) {
         const updated = await this.revenuePlansService.update(existing.id, {
           plannedAmount: item.plannedAmount,
+          plannedAcceptanceDate: item.plannedAcceptanceDate,
+          batchSequence: item.batchSequence,
+          periodStartDate: item.periodStartDate,
+          periodEndDate: item.periodEndDate,
           note: item.note,
         });
         results.push(updated);
       } else {
-        const created = await this.revenuePlansService.create(contractId, item);
+        const created = await this.revenuePlansService.create(contractId, {
+          ...item,
+          period,
+        });
         results.push(created);
       }
     }

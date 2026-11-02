@@ -2,12 +2,21 @@
 
 import { useMemo, useState } from 'react';
 import { formatCurrencyVND, formatPeriod } from '@/lib/format';
+import { formatTrendPeriodLabel } from '@/lib/dashboard-scope';
 import type {
   DashboardMonthlyPoint,
   DashboardProjectRow,
   DashboardStatusSlice,
 } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import {
+  CHART_BLUE,
+  CHART_GREEN,
+  CHART_ORANGE,
+  CHART_RED,
+  CHART_SLATE,
+  pieColorForKey,
+} from '@/lib/chart-colors';
 
 export type ChartType = 'bar' | 'line' | 'pie';
 
@@ -18,12 +27,11 @@ function parseAmount(value: string) {
 
 /** High-contrast series for dark-on-light UI */
 const SERIES = {
-  planned: { color: '#1e293b', label: 'Kế hoạch' },
-  accepted: { color: '#059669', label: 'Nghiệm thu' },
-  collected: { color: '#2563eb', label: 'Thu tiền' },
+  planned: { color: CHART_SLATE, label: 'Kế hoạch' },
+  accepted: { color: CHART_GREEN, label: 'Nghiệm thu' },
+  collected: { color: CHART_BLUE, label: 'Thu tiền' },
 } as const;
 
-const PIE_COLORS = ['#059669', '#dc2626', '#ea580c', '#475569'];
 
 type SelectedPoint = {
   period: string;
@@ -137,7 +145,7 @@ export function DashboardTrendChart({
       <Legend />
       {selected ? (
         <DetailPanel
-          title={`Tháng ${formatPeriod(selected.period)}${
+          title={`Kỳ ${formatTrendPeriodLabel(selected.period)}${
             selected.series ? ` · ${SERIES[selected.series].label}` : ''
           }`}
           rows={[
@@ -436,7 +444,7 @@ export function DashboardPieChart({ data }: { data: DashboardStatusSlice[] }) {
         .map((item, index) => ({
           ...item,
           value: parseAmount(item.amount),
-          color: PIE_COLORS[index % PIE_COLORS.length],
+          color: pieColorForKey(item.key, index),
         }))
         .filter((s) => s.value > 0),
     [data],
@@ -597,7 +605,13 @@ export function DashboardPieChart({ data }: { data: DashboardStatusSlice[] }) {
   );
 }
 
-export function DashboardProjectBars({ data }: { data: DashboardProjectRow[] }) {
+export function DashboardProjectBars({
+  data,
+  onSelectProject,
+}: {
+  data: DashboardProjectRow[];
+  onSelectProject?: (projectId: string) => void;
+}) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   if (data.length === 0) return null;
@@ -622,11 +636,12 @@ export function DashboardProjectBars({ data }: { data: DashboardProjectRow[] }) 
           <button
             key={row.projectId}
             type="button"
-            onClick={() =>
+            onClick={() => {
               setSelectedId((prev) =>
                 prev === row.projectId ? null : row.projectId,
-              )
-            }
+              );
+              onSelectProject?.(row.projectId);
+            }}
             className={cn(
               'w-full space-y-1.5 rounded-lg border p-3 text-left transition-colors',
               active
@@ -638,10 +653,7 @@ export function DashboardProjectBars({ data }: { data: DashboardProjectRow[] }) 
               <span className="font-semibold text-slate-900">
                 {row.projectCode} — {row.projectName}
               </span>
-              <span className={cn(
-                'text-xs font-medium',
-                parseAmount(row.planShortfall) > 0 ? 'text-rose-700' : 'text-emerald-700',
-              )}>
+              <span className="text-xs font-medium text-slate-600">
                 {parseAmount(row.planShortfall) > 0
                   ? `Thiếu KH ${formatCurrencyVND(row.planShortfall)}`
                   : 'Đủ kế hoạch đến kỳ'}
@@ -650,9 +662,9 @@ export function DashboardProjectBars({ data }: { data: DashboardProjectRow[] }) 
             {(
               [
                 { label: 'KH', value: row.planned, color: SERIES.planned.color },
-                { label: 'TH', value: row.actualWork, color: '#8b5cf6' },
+                { label: 'TH', value: row.actualWork, color: CHART_ORANGE },
                 { label: 'Nộp HS', value: row.accepted, color: SERIES.accepted.color },
-                { label: 'Chậm HS', value: row.pendingSubmission, color: '#dc2626' },
+                { label: 'Chậm HS', value: row.pendingSubmission, color: CHART_RED },
               ] as const
             ).map((bar) => (
               <div key={bar.label} className="flex items-center gap-2">
@@ -688,7 +700,7 @@ export function DashboardProjectBars({ data }: { data: DashboardProjectRow[] }) 
             {
               label: 'Đã thực hiện',
               value: selected.actualWork,
-              color: '#8b5cf6',
+              color: CHART_ORANGE,
             },
             {
               label: 'Đã nộp hồ sơ',
@@ -698,12 +710,12 @@ export function DashboardProjectBars({ data }: { data: DashboardProjectRow[] }) 
             {
               label: 'Chậm trễ: chờ nộp hồ sơ',
               value: selected.pendingSubmission,
-              color: '#dc2626',
+              color: CHART_RED,
             },
             {
               label: 'Thiếu so với kế hoạch',
               value: selected.planShortfall,
-              color: '#dc2626',
+              color: CHART_RED,
             },
             {
               label: 'Đã thu tiền',
@@ -713,7 +725,7 @@ export function DashboardProjectBars({ data }: { data: DashboardProjectRow[] }) 
             {
               label: 'Còn phải thu',
               value: selected.outstandingCollection,
-              color: '#dc2626',
+              color: CHART_RED,
             },
           ]}
         />

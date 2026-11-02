@@ -1,22 +1,24 @@
 import {
-  IsBoolean,
   IsDateString,
   IsEnum,
+  IsInt,
   IsOptional,
   IsString,
-  IsUUID,
+  Min,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { ProjectAssignmentRole } from '@prisma/client';
 
 export class CreateProjectAssignmentDto {
-  @ApiProperty({ format: 'uuid' })
-  @IsUUID()
-  employeeId: string;
-
   @ApiProperty({ enum: ProjectAssignmentRole })
   @IsEnum(ProjectAssignmentRole)
   role: ProjectAssignmentRole;
+
+  @ApiPropertyOptional({ default: 1, description: 'Số lượng nhân sự theo vai trò' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  quantity?: number;
 
   @ApiPropertyOptional({ type: String, format: 'date-time' })
   @IsOptional()
@@ -27,11 +29,6 @@ export class CreateProjectAssignmentDto {
   @IsOptional()
   @IsDateString()
   endDate?: string;
-
-  @ApiPropertyOptional({ default: false })
-  @IsOptional()
-  @IsBoolean()
-  isPrimary?: boolean;
 
   @ApiPropertyOptional()
   @IsOptional()

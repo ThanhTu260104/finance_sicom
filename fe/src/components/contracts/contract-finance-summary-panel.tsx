@@ -1,176 +1,96 @@
 'use client';
 
+import { AlertTriangle } from 'lucide-react';
 import {
   formatCurrencyVND,
   formatPeriod,
   isNegativeDecimal,
 } from '@/lib/format';
 import type { ContractFinanceSummary } from '@/lib/types';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { MoneyKpiCard } from '@/components/dashboard/shared/money-kpi-card';
+import { useContractFlowLabels } from '@/lib/contract-kind';
 import { cn } from '@/lib/utils';
 
-function MetricCard({
-  label,
-  value,
-  hint,
-  tone,
-  large,
-}: {
-  label: string;
-  value: React.ReactNode;
-  hint?: string;
-  tone?: 'danger' | 'success' | 'warning' | 'default';
-  large?: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        'rounded-lg border border-slate-200 bg-white p-4',
-        tone === 'danger' && 'border-red-200 bg-red-50/60',
-        tone === 'success' && 'border-emerald-200 bg-emerald-50/50',
-        tone === 'warning' && 'border-amber-200 bg-amber-50/60',
-      )}
-    >
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-        {label}
-      </p>
-      <div
-        className={cn(
-          'mt-1 font-semibold text-slate-900',
-          large ? 'text-2xl' : 'text-lg',
-          tone === 'danger' && 'text-red-700',
-          tone === 'success' && 'text-emerald-800',
-          tone === 'warning' && 'text-amber-800',
-        )}
-      >
-        {value}
-      </div>
-      {hint ? <p className="mt-1 text-xs text-slate-500">{hint}</p> : null}
-    </div>
-  );
-}
-
-function formatRate(value?: string) {
-  if (!value) return '0%';
-  return `${value}%`;
-}
-
-function remainingDisplay(value: string, over?: boolean) {
-  if (over || value === 'OVER_CONTRACT_VALUE') {
-    return 'Vượt giá trị HĐ';
-  }
-  return formatCurrencyVND(value);
-}
-
+/**
+ * Hàng chỉ số đầu trang chi tiết HĐ. Nhãn theo chiều HĐ:
+ * CĐT — mình nghiệm thu & thu tiền; thầu phụ / NCC — đối tác nghiệm thu & mình chi trả.
+ */
 export function ContractFinanceSummaryPanel({
   finance,
 }: {
   finance: ContractFinanceSummary;
 }) {
+  const flow = useContractFlowLabels();
+  const expense = flow.kind !== 'INVESTOR';
   const over =
     finance.overContractValue ||
     finance.remainingAcceptance === 'OVER_CONTRACT_VALUE';
   const scheduleBehind =
     !!finance.scheduleVariance && isNegativeDecimal(finance.scheduleVariance);
   const acceptedRate = Number(finance.acceptanceRatePercent ?? 0);
-  const scheduleRate = Number(finance.scheduleRatePercent ?? 0);
+  const outstanding = Number(finance.outstandingCollection ?? 0);
 
-  const situationLine = over
-    ? 'Cảnh báo: đã nghiệm thu vượt giá trị hợp đồng.'
-    : scheduleBehind
-      ? `Chậm kế hoạch lũy kế ${formatCurrencyVND(
-          finance.scheduleVariance?.replace(/^-/, '') ?? '0',
-        )} — cần đẩy nghiệm thu.`
-      : acceptedRate >= 100
-        ? 'Đã nghiệm thu đủ giá trị hợp đồng.'
-        : `Còn ${remainingDisplay(finance.remainingAcceptance, over)} chưa nghiệm thu (${(100 - acceptedRate).toFixed(1)}% HĐ).`;
+  const alerts: string[] = [];
+  if (over) {
+    alerts.push('Đã nghiệm thu vượt giá trị hợp đồng.');
+  } else if (scheduleBehind) {
+    const gap = formatCurrencyVND(finance.scheduleVariance!.replace(/^-/, ''));
+    const period = finance.currentPeriod
+      ? ` đến kỳ ${formatPeriod(finance.currentPeriod)}`
+      : '';
+    alerts.push(
+      expense
+        ? `${flow.counterpartyRole} chậm so với kế hoạch${period}: thiếu ${gap}.`
+        : `Chậm kế hoạch nghiệm thu${period}: thiếu ${gap} — cần đẩy nghiệm thu.`,
+    );
+  }
+  if (!finance.planMatchesContractValue) {
+    alerts.push(
+      `Tổng kế hoạch (${formatCurrencyVND(finance.totalPlanned)}) chưa khớp giá trị HĐ.`,
+    );
+  }
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">Tóm tắt tài chính</CardTitle>
-        <p className="text-sm text-slate-600">{situationLine}</p>
-      </CardHeader>
-      <CardContent className="space-y-5">
-        <section>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Tổng hợp toàn hợp đồng
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <MetricCard
-            label="Giá trị hợp đồng"
-            value={formatCurrencyVND(finance.contractValue)}
-            large
-          />
-          <MetricCard
-            label="Tổng kế hoạch nghiệm thu"
-            value={formatCurrencyVND(finance.totalPlanned)}
-            hint={
-              finance.planMatchesContractValue
-                ? 'KH khớp giá trị HĐ'
-                : 'KH chưa khớp giá trị HĐ'
-            }
-            tone={finance.planMatchesContractValue ? 'success' : 'warning'}
-            large
-          />
-          <MetricCard
-            label="Đã nghiệm thu"
-            value={formatCurrencyVND(finance.totalAccepted)}
-            hint="Chỉ tính đợt đã nộp hồ sơ"
-            large
-          />
-          <MetricCard
-            label="Đã thu tiền"
-            value={formatCurrencyVND(finance.totalCollected)}
-            hint={`Còn phải thu ${formatCurrencyVND(finance.outstandingCollection)}`}
-            tone={Number(finance.outstandingCollection) > 0 ? 'warning' : 'success'}
-            large
-          />
-          <MetricCard
-            label="Còn phải nghiệm thu"
-            value={remainingDisplay(finance.remainingAcceptance, over)}
-            hint={`Đã hoàn thành ${formatRate(finance.acceptanceRatePercent)} giá trị HĐ`}
-            tone={over ? 'danger' : 'warning'}
-            large
-          />
-          </div>
-        </section>
-
-        <section>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-            Theo kế hoạch đến kỳ {finance.currentPeriod ? formatPeriod(finance.currentPeriod) : 'hiện tại'}
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <MetricCard
-              label="Kế hoạch đến kỳ"
-              value={formatCurrencyVND(finance.plannedToDate ?? '0')}
-              hint={`Kế hoạch riêng kỳ này: ${formatCurrencyVND(finance.monthlyRequiredAcceptance ?? '0')}`}
-              large
-            />
-            <MetricCard
-              label="Đã nộp hồ sơ"
-              value={formatCurrencyVND(finance.submittedToDate ?? finance.totalAccepted)}
-              hint="Lũy kế các đợt đã nộp hồ sơ"
-              tone={scheduleRate >= 100 ? 'success' : 'warning'}
-              large
-            />
-            <MetricCard
-              label="Chậm trễ: chờ nộp HS"
-              value={formatCurrencyVND(finance.pendingSubmissionToDate ?? '0')}
-              hint="Đã lên đợt nghiệm thu nhưng chưa nộp hồ sơ"
-              tone={Number(finance.pendingSubmissionToDate ?? 0) > 0 ? 'danger' : 'success'}
-              large
-            />
-            <MetricCard
-              label="Chậm trễ: chưa đạt KH"
-              value={formatCurrencyVND(finance.remainingPlanAfterPending ?? '0')}
-              hint={scheduleBehind ? situationLine : 'Đã đủ kế hoạch đến kỳ'}
-              tone={scheduleBehind ? 'danger' : 'success'}
-              large
-            />
-          </div>
-        </section>
-      </CardContent>
-    </Card>
+    <div className="space-y-2">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <MoneyKpiCard
+          label="Giá trị HĐ"
+          value={finance.contractValue}
+          sub={`Kế hoạch ${formatCurrencyVND(finance.totalPlanned)}`}
+        />
+        <MoneyKpiCard
+          label={flow.accepted}
+          value={finance.totalAccepted}
+          sub={`${acceptedRate.toFixed(1)}% giá trị HĐ`}
+        />
+        <MoneyKpiCard
+          label={flow.cashedFull}
+          value={finance.totalCollected}
+          sub={expense ? 'Tiền mình đã trả đối tác' : 'Tiền CĐT đã trả'}
+        />
+        <MoneyKpiCard
+          label={flow.outstanding}
+          value={finance.outstandingCollection}
+          sub="Đã nghiệm thu, chưa thanh toán"
+          className={cn(outstanding > 0 && 'border-amber-200 bg-amber-50/60')}
+        />
+        <MoneyKpiCard
+          label="Chưa nghiệm thu"
+          value={over ? '0' : finance.remainingAcceptance}
+          sub={over ? 'Vượt giá trị HĐ' : 'Phần còn lại theo HĐ'}
+          className={cn(over && 'border-red-200 bg-red-50/60')}
+        />
+      </div>
+      {alerts.length > 0 ? (
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <ul className="space-y-0.5">
+            {alerts.map((a) => (
+              <li key={a}>{a}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
   );
 }

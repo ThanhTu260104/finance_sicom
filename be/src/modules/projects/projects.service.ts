@@ -7,8 +7,10 @@ import {
 import {
   AcceptancePaymentStatus,
   AcceptanceStatus,
+  ContractKind,
   DocumentStatus,
   Prisma,
+  ProjectAssignmentRole,
   ProjectStatus,
 } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
@@ -28,6 +30,7 @@ import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { QueryProjectDto } from './dto/query-project.dto';
 import { BulkProjectDto } from './dto/bulk-project.dto';
+import { REVENUE_CONTRACT_WHERE } from '../../common/contract-kind.util';
 
 const DEFAULT_COMPANY_ID = '00000000-0000-4000-8000-000000000001';
 
@@ -38,6 +41,71 @@ export class ProjectsService {
     private readonly financialControlService: FinancialControlService,
   ) {}
 
+  private normalizeProjectManagerName(projectManagerName?: string) {
+    const name = projectManagerName?.trim();
+    if (!name) return undefined;
+    const lower = name.toLowerCase();
+    if (['—', '–', '-', 'n/a', 'na', 'null', 'none'].includes(lower)) {
+      return undefined;
+    }
+    return name;
+  }
+
+  private async upsertProjectManagerNote(
+    projectId: string,
+    projectManagerName: string,
+  ) {
+    const existing = await this.prisma.projectAssignment.findUnique({
+      where: {
+        projectId_role: {
+          projectId,
+          role: ProjectAssignmentRole.PROJECT_MANAGER,
+        },
+      },
+    });
+
+    const data = { quantity: 1, note: projectManagerName };
+    if (existing) {
+      await this.prisma.projectAssignment.update({
+        where: { id: existing.id },
+        data,
+      });
+    } else {
+      await this.prisma.projectAssignment.create({
+        data: {
+          projectId,
+          role: ProjectAssignmentRole.PROJECT_MANAGER,
+          ...data,
+        },
+      });
+    }
+  }
+
+  /** Form sửa: ô trống → xóa trưởng dự án. */
+  private async syncProjectManager(
+    projectId: string,
+    projectManagerName?: string,
+  ) {
+    const name = this.normalizeProjectManagerName(projectManagerName);
+    if (!name) {
+      await this.prisma.projectAssignment.deleteMany({
+        where: { projectId, role: ProjectAssignmentRole.PROJECT_MANAGER },
+      });
+      return;
+    }
+    await this.upsertProjectManagerNote(projectId, name);
+  }
+
+  /** Import Excel: ô trống → giữ nguyên, không xóa. */
+  private async applyProjectManagerFromImport(
+    projectId: string,
+    projectManagerName?: string,
+  ) {
+    const name = this.normalizeProjectManagerName(projectManagerName);
+    if (!name) return;
+    await this.upsertProjectManagerNote(projectId, name);
+  }
+
   private assertDateRange(startDate?: string, endDate?: string) {
     if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
       throw new BadRequestException(
@@ -46,36 +114,71 @@ export class ProjectsService {
     }
   }
 
+  private enrichProjectManagerName<
+    T extends {
+      assignments?: Array<{ role: ProjectAssignmentRole; note: string | null }>;
+    },
+  >(row: T) {
+    const pm = row.assignments?.find(
+      (a) => a.role === ProjectAssignmentRole.PROJECT_MANAGER,
+    );
+    return {
+      ...row,
+      projectManagerName: pm?.note?.trim() || null,
+    };
+  }
+
   async create(dto: CreateProjectDto) {
-    this.assertDateRange(dto.startDate, dto.endDate);
+    const { projectManagerName, ...projectData } = dto;
+    this.assertDateRange(projectData.startDate, projectData.endDate);
 
     const existing = await this.prisma.project.findFirst({
-      where: { code: dto.code, deletedAt: null },
+      where: { code: projectData.code, deletedAt: null },
     });
     if (existing) {
-      throw new ConflictException(`Project code "${dto.code}" already exists`);
+      throw new ConflictException(
+        `Project code "${projectData.code}" already exists`,
+      );
     }
 
-    if (dto.customerId) {
+    if (projectData.customerId) {
       const customer = await this.prisma.customer.findFirst({
-        where: { id: dto.customerId, deletedAt: null },
+        where: { id: projectData.customerId, deletedAt: null },
       });
       if (!customer) {
-        throw new NotFoundException(`Customer ${dto.customerId} not found`);
+        throw new NotFoundException(
+          `Customer ${projectData.customerId} not found`,
+        );
       }
     }
 
-    return this.prisma.project.create({
+    const row = await this.prisma.project.create({
       data: {
-        ...dto,
-        startDate: dto.startDate ? new Date(dto.startDate) : undefined,
-        endDate: dto.endDate ? new Date(dto.endDate) : undefined,
+        ...projectData,
+        startDate: projectData.startDate
+          ? new Date(projectData.startDate)
+          : undefined,
+        endDate: projectData.endDate
+          ? new Date(projectData.endDate)
+          : undefined,
       },
       include: {
         customer: { select: { id: true, code: true, name: true } },
-        _count: { select: { contracts: { where: { deletedAt: null } } } },
+        assignments: {
+          where: { role: ProjectAssignmentRole.PROJECT_MANAGER },
+          take: 1,
+        },
+        _count: {
+          select: {
+            contracts: {
+              where: { deletedAt: null, ...REVENUE_CONTRACT_WHERE },
+            },
+          },
+        },
       },
     });
+    await this.syncProjectManager(row.id, projectManagerName);
+    return this.findOne(row.id);
   }
 
   async findAll(query: QueryProjectDto): Promise<PaginatedResult<unknown>> {
@@ -124,18 +227,43 @@ export class ProjectsService {
         orderBy: { [orderByField]: sortOrder },
         include: {
           customer: { select: { id: true, code: true, name: true } },
-          _count: { select: { contracts: { where: { deletedAt: null } } } },
+          contracts: {
+            where: { deletedAt: null, ...REVENUE_CONTRACT_WHERE },
+            select: { id: true, contractNo: true, name: true },
+            orderBy: { contractNo: 'asc' },
+          },
+          assignments: {
+            where: { role: ProjectAssignmentRole.PROJECT_MANAGER },
+            select: { id: true, role: true, note: true, quantity: true },
+            take: 1,
+          },
+          _count: {
+            select: {
+              contracts: {
+                where: { deletedAt: null, ...REVENUE_CONTRACT_WHERE },
+              },
+            },
+          },
         },
       }),
       this.prisma.project.count({ where }),
     ]);
 
-    return buildPaginatedResult(data, total, page, limit);
+    const enriched = data.map((row) => ({
+      ...row,
+      projectManagerName: row.assignments[0]?.note?.trim() || null,
+    }));
+
+    return buildPaginatedResult(enriched, total, page, limit);
   }
 
   async getFinanceOverview(id: string) {
     const project = await this.findOne(id);
-    const contractIds = (project.contracts ?? []).map((c) => c.id);
+    // Tổng quan nghiệm thu / thu tiền chỉ tính HĐ CĐT (HĐ thầu phụ / NCC là chi)
+    const revenueContracts = (project.contracts ?? []).filter(
+      (c) => c.kind === ContractKind.INVESTOR,
+    );
+    const contractIds = revenueContracts.map((c) => c.id);
 
     const [acceptances, collections] = await Promise.all([
       this.prisma.acceptance.findMany({
@@ -147,7 +275,7 @@ export class ProjectsService {
     ]);
 
     const contractValue = sumDecimals(
-      (project.contracts ?? []).map((c) => c.contractValue),
+      revenueContracts.map((c) => c.contractValue),
     );
 
     const submittedAcceptances = acceptances.filter(
@@ -160,7 +288,9 @@ export class ProjectsService {
     );
     const totalCollected = sumDecimals(collections.map((c) => c.amount));
 
-    const remainingAcceptanceRaw = new Decimal(contractValue).sub(totalAccepted);
+    const remainingAcceptanceRaw = new Decimal(contractValue).sub(
+      totalAccepted,
+    );
     const overContractValue = remainingAcceptanceRaw.isNegative();
     const remainingAcceptance = overContractValue
       ? new Decimal(0)
@@ -193,15 +323,17 @@ export class ProjectsService {
         .map((a) => a.amount),
     );
 
-    const acceptanceRate = compareDecimals(contractValue, 0) > 0
-      ? totalAccepted.div(contractValue).mul(100)
-      : new Decimal(0);
-    const collectionRate = compareDecimals(totalAccepted, 0) > 0
-      ? totalCollected.div(totalAccepted).mul(100)
-      : new Decimal(0);
+    const acceptanceRate =
+      compareDecimals(contractValue, 0) > 0
+        ? totalAccepted.div(contractValue).mul(100)
+        : new Decimal(0);
+    const collectionRate =
+      compareDecimals(totalAccepted, 0) > 0
+        ? totalCollected.div(totalAccepted).mul(100)
+        : new Decimal(0);
 
     const contractOverviews = await Promise.all(
-      (project.contracts ?? []).map(async (contract) => {
+      revenueContracts.map(async (contract) => {
         const fc = await this.financialControlService.getFinancialControl(
           contract.id,
         );
@@ -218,18 +350,19 @@ export class ProjectsService {
       }),
     );
     const plannedToDate = sumDecimals(
-      contractOverviews.map((contract) =>
-        new Decimal(contract.summary.plannedToDate ?? 0),
+      contractOverviews.map(
+        (contract) => new Decimal(contract.summary.plannedToDate ?? 0),
       ),
     );
     const submittedToDate = sumDecimals(
-      contractOverviews.map((contract) =>
-        new Decimal(contract.summary.submittedToDate ?? 0),
+      contractOverviews.map(
+        (contract) => new Decimal(contract.summary.submittedToDate ?? 0),
       ),
     );
     const pendingSubmissionToDate = sumDecimals(
-      contractOverviews.map((contract) =>
-        new Decimal(contract.summary.pendingSubmissionToDate ?? 0),
+      contractOverviews.map(
+        (contract) =>
+          new Decimal(contract.summary.pendingSubmissionToDate ?? 0),
       ),
     );
     const remainingPlanAfterPending = maxDecimal(
@@ -299,65 +432,86 @@ export class ProjectsService {
       where: { id, deletedAt: null },
       include: {
         customer: true,
-        assignments: { orderBy: { createdAt: 'desc' } },
+        assignments: { orderBy: [{ role: 'asc' }, { createdAt: 'desc' }] },
         contracts: {
           where: { deletedAt: null },
           orderBy: { createdAt: 'desc' },
+          include: {
+            company: { select: { id: true, code: true, name: true } },
+            counterparty: { select: { id: true, code: true, name: true } },
+          },
         },
       },
     });
     if (!project) {
       throw new NotFoundException(`Project ${id} not found`);
     }
-    return project;
+    return this.enrichProjectManagerName(project);
   }
 
   async update(id: string, dto: UpdateProjectDto) {
     await this.findOne(id);
-    this.assertDateRange(dto.startDate, dto.endDate);
+    const { projectManagerName, ...projectData } = dto;
+    this.assertDateRange(projectData.startDate, projectData.endDate);
 
-    if (dto.code) {
+    if (projectData.code) {
       const existing = await this.prisma.project.findFirst({
-        where: { code: dto.code, deletedAt: null, NOT: { id } },
+        where: { code: projectData.code, deletedAt: null, NOT: { id } },
       });
       if (existing) {
         throw new ConflictException(
-          `Project code "${dto.code}" already exists`,
+          `Project code "${projectData.code}" already exists`,
         );
       }
     }
 
-    if (dto.customerId) {
+    if (projectData.customerId) {
       const customer = await this.prisma.customer.findFirst({
-        where: { id: dto.customerId, deletedAt: null },
+        where: { id: projectData.customerId, deletedAt: null },
       });
       if (!customer) {
-        throw new NotFoundException(`Customer ${dto.customerId} not found`);
+        throw new NotFoundException(
+          `Customer ${projectData.customerId} not found`,
+        );
       }
     }
 
-    return this.prisma.project.update({
+    const row = await this.prisma.project.update({
       where: { id },
       data: {
-        ...dto,
+        ...projectData,
         startDate:
-          dto.startDate !== undefined
-            ? dto.startDate
-              ? new Date(dto.startDate)
+          projectData.startDate !== undefined
+            ? projectData.startDate
+              ? new Date(projectData.startDate)
               : null
             : undefined,
         endDate:
-          dto.endDate !== undefined
-            ? dto.endDate
-              ? new Date(dto.endDate)
+          projectData.endDate !== undefined
+            ? projectData.endDate
+              ? new Date(projectData.endDate)
               : null
             : undefined,
       },
       include: {
         customer: { select: { id: true, code: true, name: true } },
-        _count: { select: { contracts: { where: { deletedAt: null } } } },
+        assignments: {
+          where: { role: ProjectAssignmentRole.PROJECT_MANAGER },
+          take: 1,
+        },
+        _count: {
+          select: {
+            contracts: {
+              where: { deletedAt: null, ...REVENUE_CONTRACT_WHERE },
+            },
+          },
+        },
       },
     });
+    if (projectManagerName !== undefined) {
+      await this.syncProjectManager(id, projectManagerName);
+    }
+    return this.findOne(id);
   }
 
   async remove(id: string) {
@@ -374,9 +528,7 @@ export class ProjectsService {
       where: { code: customerCode.trim(), deletedAt: null },
     });
     if (!customer) {
-      throw new NotFoundException(
-        `Customer code "${customerCode}" not found`,
-      );
+      throw new NotFoundException(`Customer code "${customerCode}" not found`);
     }
     return customer.id;
   }
@@ -424,12 +576,64 @@ export class ProjectsService {
 
       if (existing) {
         const row = await this.update(existing.id, payload);
+        await this.applyProjectManagerFromImport(
+          existing.id,
+          item.projectManagerName,
+        );
         results.push(row);
         updated += 1;
       } else {
-        const row = await this.create(payload);
-        results.push(row);
-        created += 1;
+        const softDeleted = await this.prisma.project.findFirst({
+          where: { code: item.code, deletedAt: { not: null } },
+        });
+        if (softDeleted) {
+          const row = await this.prisma.project.update({
+            where: { id: softDeleted.id },
+            data: {
+              ...payload,
+              startDate: payload.startDate ? new Date(payload.startDate) : null,
+              endDate: payload.endDate ? new Date(payload.endDate) : null,
+              deletedAt: null,
+              status: payload.status ?? ProjectStatus.ACTIVE,
+            },
+            include: {
+              customer: { select: { id: true, code: true, name: true } },
+              _count: {
+                select: {
+                  contracts: {
+                    where: { deletedAt: null, ...REVENUE_CONTRACT_WHERE },
+                  },
+                },
+              },
+            },
+          });
+          await this.applyProjectManagerFromImport(
+            softDeleted.id,
+            item.projectManagerName,
+          );
+          results.push(row);
+          updated += 1;
+        } else {
+          try {
+            const row = await this.create(payload);
+            await this.applyProjectManagerFromImport(
+              row.id,
+              item.projectManagerName,
+            );
+            results.push(row);
+            created += 1;
+          } catch (err) {
+            if (
+              err instanceof Prisma.PrismaClientKnownRequestError &&
+              err.code === 'P2002'
+            ) {
+              throw new ConflictException(
+                `Mã dự án "${item.code}" đã tồn tại (kể cả bản đã xóa).`,
+              );
+            }
+            throw err;
+          }
+        }
       }
     }
 
